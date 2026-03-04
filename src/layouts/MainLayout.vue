@@ -18,23 +18,41 @@ import AddTask from '@/components/task/AddTask.vue'
 import { useTaskStore } from '@/stores/task'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import { useDialog } from 'naive-ui'
+import {
+  NModal, NCard, NButton, NSpace, NIcon,
+} from 'naive-ui'
+import { WarningOutline } from '@vicons/ionicons5'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const taskStore = useTaskStore()
-const dialog = useDialog()
 
 const isTaskPage = computed(() => route.path.startsWith('/task'))
 const isPreferencePage = computed(() => route.path.startsWith('/preference'))
 const showAbout = ref(false)
 const appReady = ref(false)
+const showExitDialog = ref(false)
+const isExiting = ref(false)
 
 let unlistenDragDrop: (() => void) | null = null
 let unlistenMenuEvent: (() => void) | null = null
 let unlistenCloseRequested: (() => void) | null = null
+
+async function handleExitConfirm() {
+  isExiting.value = true
+  // Both dialog and window body fade out simultaneously
+  showExitDialog.value = false
+  appReady.value = false
+  await new Promise((r) => setTimeout(r, 450))
+  const appWindow = getCurrentWindow()
+  await appWindow.destroy()
+}
+
+function handleExitCancel() {
+  showExitDialog.value = false
+}
 
 onMounted(async () => {
   nextTick(() => { appReady.value = true })
@@ -84,18 +102,9 @@ onMounted(async () => {
   const appWindow = getCurrentWindow()
   unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
     event.preventDefault()
-    dialog.warning({
-      title: t('app.confirm-exit-title'),
-      content: t('app.confirm-exit-message'),
-      positiveText: t('app.yes'),
-      negativeText: t('app.no'),
-      onPositiveClick: async () => {
-        // Simultaneously: dialog close animation (Naive UI built-in) + window body fade
-        appReady.value = false
-        await new Promise((r) => setTimeout(r, 400))
-        await appWindow.destroy()
-      },
-    })
+    if (!isExiting.value) {
+      showExitDialog.value = true
+    }
   })
 })
 
@@ -130,6 +139,37 @@ onUnmounted(() => {
       :type="appStore.addTaskType"
       @close="appStore.hideAddTaskDialog()"
     />
+
+    <!-- Exit confirmation dialog with synchronized fade animation -->
+    <NModal
+      :show="showExitDialog"
+      preset="card"
+      :title="t('app.confirm-exit-title')"
+      :bordered="false"
+      :closable="true"
+      :mask-closable="true"
+      size="small"
+      style="width: 400px"
+      transform-origin="center"
+      @update:show="(v: boolean) => { if (!v) handleExitCancel() }"
+    >
+      <div class="exit-dialog-body">
+        <NIcon :size="22" color="#e8a838" style="margin-right: 8px; flex-shrink: 0;">
+          <WarningOutline />
+        </NIcon>
+        <span>{{ t('app.confirm-exit-message') }}</span>
+      </div>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton class="exit-btn" @click="handleExitCancel">
+            {{ t('app.no') }}
+          </NButton>
+          <NButton class="exit-btn" type="warning" @click="handleExitConfirm">
+            {{ t('app.yes') }}
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
   </div>
 </template>
 
@@ -161,5 +201,16 @@ onUnmounted(() => {
   top: 6px;
   right: 12px;
   z-index: 100;
+}
+.exit-dialog-body {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 4px 0;
+}
+.exit-btn {
+  min-width: 80px;
+  padding: 0 24px;
 }
 </style>

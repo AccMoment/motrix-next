@@ -77,6 +77,8 @@ const strokeColor = '#333'
       <rect
         v-for="atom in atoms"
         :key="atom.id"
+        class="piece-cell"
+        :class="{ 'piece-active': atom.status > 0 }"
         :x="atom.x"
         :y="atom.y"
         :width="atomWidth"
@@ -100,6 +102,13 @@ const strokeColor = '#333'
 }
 .task-graphic {
   display: block;
+}
+.piece-cell {
+  transition: fill 0.5s ease, opacity 0.5s ease;
+  opacity: 0.5;
+}
+.piece-active {
+  opacity: 1;
 }
 .no-bitfield {
   color: #666;
