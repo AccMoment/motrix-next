@@ -21,11 +21,11 @@ However, the original project has been largely inactive since 2023. The Electron
 
 ### What we kept
 
-We are deeply grateful to the original Motrix community. The following were too valuable to discard and have been carefully carried forward:
+We owe a great deal to the original [Motrix](https://github.com/agalwood/Motrix) and its community. The following were gratefully adopted and continue to serve as the foundation for parts of Motrix Next:
 
-- **Internationalization** — 25+ community-contributed language packs (Chinese, Japanese, Korean, Arabic, French, German, and many more), all preserved and integrated with Vue I18n
-- **Aria2 RPC integration** — the battle-tested aria2 download engine and its JSON-RPC protocol remain at the core, handling HTTP, FTP, BitTorrent, and Magnet links
-- **UX philosophy** — Motrix's principle of keeping the interface clean, simple, and distraction-free is carried forward in every design decision
+- **Aria2 error code system and RPC client** — the error handling conventions and JSON-RPC communication layer for the aria2 engine
+- **Internationalization** — 25+ community-contributed locale files covering Chinese, Japanese, Korean, Arabic, French, German, and many more
+- **Download utilities** — tracker list management, cURL command parsing, and other protocol-level helperst management, cURL parsing, and related helpers
 
 ### What we rebuilt
 
