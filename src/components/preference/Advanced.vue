@@ -83,12 +83,23 @@ const aria2ConfPath = ref('')
 const sessionPath = ref('')
 const logPath = ref('')
 
+function generateSecret(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  const values = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(values, (v) => chars[v % chars.length]).join('')
+}
+
 const form = ref(buildForm())
 
 function buildForm() {
   const c = (preferenceStore.config || {}) as Record<string, unknown>
   const proxy = (c.proxy as Record<string, unknown>) || {}
   const protocols = (c.protocols as Record<string, boolean>) || {}
+  const savedSecret = (c.rpcSecret as string) || ''
+  const rpcSecret = savedSecret || generateSecret()
+  if (!savedSecret) {
+    preferenceStore.updateAndSave({ rpcSecret })
+  }
   return {
     autoCheckUpdate: c.autoCheckUpdate !== false,
     lastCheckUpdateTime: (c.lastCheckUpdateTime as number) || 0,
@@ -103,7 +114,7 @@ function buildForm() {
     autoSyncTracker: !!c.autoSyncTracker,
     lastSyncTrackerTime: (c.lastSyncTrackerTime as number) || 0,
     rpcListenPort: (c.rpcListenPort as number) || ENGINE_RPC_PORT,
-    rpcSecret: (c.rpcSecret as string) || '',
+    rpcSecret,
     enableUpnp: c.enableUpnp !== false,
     listenPort: (c.listenPort as number) || 21301,
     dhtListenPort: (c.dhtListenPort as number) || 26701,
@@ -164,10 +175,7 @@ function onRpcPortDice() {
 }
 
 function onRpcSecretDice() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  let result = ''
-  for (let i = 0; i < 16; i++) result += chars[Math.floor(Math.random() * chars.length)]
-  form.value.rpcSecret = result
+  form.value.rpcSecret = generateSecret()
 }
 
 function onBtPortDice() {
@@ -215,6 +223,10 @@ function handleFactoryReset() {
 }
 
 function handleSave() {
+  if (!form.value.rpcSecret) {
+    message.error(t('preferences.rpc-secret-empty-warning') || 'RPC Secret is required')
+    return
+  }
   const data: Record<string, unknown> = {
     ...form.value,
     btTracker: convertLineToComma(form.value.btTracker),
@@ -313,9 +325,9 @@ onMounted(() => {
           </NButton>
         </NInputGroup>
       </NFormItem>
-      <NFormItem :label="t('preferences.rpc-secret')">
+      <NFormItem :label="t('preferences.rpc-secret')" :validation-status="form.rpcSecret ? undefined : 'error'">
         <NInputGroup>
-          <NInput type="password" show-password-on="click" v-model:value="form.rpcSecret" placeholder="RPC Secret" style="flex: 1;" />
+          <NInput type="password" show-password-on="click" v-model:value="form.rpcSecret" placeholder="RPC Secret" style="flex: 1;" :status="form.rpcSecret ? undefined : 'error'" />
           <NButton @click="onRpcSecretDice" style="padding: 0 10px;">
             <template #icon><NIcon :size="14"><DiceOutline /></NIcon></template>
           </NButton>

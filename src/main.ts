@@ -25,20 +25,25 @@ preferenceStore.loadPreference().then(async () => {
         (i18n.global.locale as any).value = locale
     }
 
-    // Initialize aria2 RPC connection
     const config = preferenceStore.config || {}
     const port = (config.rpcListenPort as number) || ENGINE_RPC_PORT
-    const secret = (config.rpcSecret as string) || ''
+    let secret = (config.rpcSecret as string) || ''
 
-    // Always set API first (supports HTTP fallback even without WebSocket)
+    if (!secret) {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+        const values = crypto.getRandomValues(new Uint8Array(16))
+        secret = Array.from(values, (v) => chars[v % chars.length]).join('')
+        await preferenceStore.updateAndSave({ rpcSecret: secret })
+    }
+
     taskStore.setApi(aria2Api as any)
 
-    // Start aria2c sidecar engine via Tauri backend
     try {
         const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('save_system_config', {
+            config: { 'rpc-secret': secret, 'rpc-listen-port': String(port) },
+        })
         await invoke('start_engine_command')
-        console.log('[aria2] Engine started')
-        // Wait for aria2 to bind its RPC port
         await new Promise((r) => setTimeout(r, 500))
     } catch (e) {
         console.error('[aria2] Failed to start engine:', e)

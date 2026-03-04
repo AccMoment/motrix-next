@@ -1,8 +1,8 @@
-use tauri::Manager;
-use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use std::sync::Mutex;
 use log;
+use std::sync::Mutex;
+use tauri::Manager;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
 
 pub struct EngineState {
     child: Mutex<Option<CommandChild>>,
@@ -69,7 +69,9 @@ pub fn stop_engine(app: &tauri::AppHandle) -> Result<(), String> {
     let mut child_lock = state.child.lock().map_err(|e| e.to_string())?;
 
     if let Some(child) = child_lock.take() {
-        child.kill().map_err(|e| format!("Failed to kill aria2c: {}", e))?;
+        child
+            .kill()
+            .map_err(|e| format!("Failed to kill aria2c: {}", e))?;
     }
 
     Ok(())
@@ -83,11 +85,8 @@ pub fn restart_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Res
 fn build_start_args(config: &serde_json::Value) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
-    // Essential defaults — always enable RPC on expected port
     let mut has_enable_rpc = false;
     let mut has_rpc_listen_port = false;
-    let mut has_rpc_allow_origin = false;
-    let mut has_rpc_listen_all = false;
 
     if let Some(obj) = config.as_object() {
         for (key, value) in obj {
@@ -100,27 +99,20 @@ fn build_start_args(config: &serde_json::Value) -> Vec<String> {
             match key.as_str() {
                 "enable-rpc" => has_enable_rpc = true,
                 "rpc-listen-port" => has_rpc_listen_port = true,
-                "rpc-allow-origin-all" => has_rpc_allow_origin = true,
-                "rpc-listen-all" => has_rpc_listen_all = true,
+                "rpc-allow-origin-all" | "rpc-listen-all" => continue,
                 _ => {}
             }
             args.push(format!("--{}={}", key, val_str));
         }
     }
 
-    // Add essential defaults if not provided by config
     if !has_enable_rpc {
         args.push("--enable-rpc=true".to_string());
     }
     if !has_rpc_listen_port {
         args.push("--rpc-listen-port=16800".to_string());
     }
-    if !has_rpc_allow_origin {
-        args.push("--rpc-allow-origin-all=true".to_string());
-    }
-    if !has_rpc_listen_all {
-        args.push("--rpc-listen-all=true".to_string());
-    }
+    args.push("--rpc-listen-all=false".to_string());
 
     args
 }
