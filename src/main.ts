@@ -130,5 +130,22 @@ preferenceStore.loadPreference().then(async () => {
     }
 
     autoCheckForUpdate()
+
+    let lastClipboardText = ''
+    getCurrentWindow().onFocusChanged(async ({ payload: focused }) => {
+        if (!focused) return
+        if (appStore.addTaskVisible) return
+        try {
+            const { readText } = await import('@tauri-apps/plugin-clipboard-manager')
+            const text = (await readText() || '').trim()
+            if (!text || text === lastClipboardText) return
+            const { detectResource } = await import('@shared/utils')
+            if (detectResource(text)) {
+                lastClipboardText = text
+                appStore.addTaskUrl = text
+                appStore.showAddTaskDialog('uri')
+            }
+        } catch { }
+    })
 })
 

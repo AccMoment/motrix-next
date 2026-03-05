@@ -95,6 +95,11 @@ watch(() => props.show, async (visible) => {
     return
   }
   if (activeTab.value === ADD_TASK_TYPE.URI && !form.value.uris) {
+    if (appStore.addTaskUrl) {
+      form.value.uris = appStore.addTaskUrl
+      appStore.addTaskUrl = ''
+      return
+    }
     try {
       const { readText } = await import('@tauri-apps/plugin-clipboard-manager')
       const text = await readText()

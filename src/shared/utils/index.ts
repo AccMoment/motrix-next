@@ -484,11 +484,13 @@ export const parseHeader = (header = ''): Record<string, string> => {
 export const formatOptionsForEngine = (options: Record<string, unknown> = {}): Record<string, string> => {
     const result: Record<string, string> = {}
     Object.keys(options).forEach((key) => {
+        const val = options[key]
+        if (val === undefined || val === null || val === '') return
         const kebabCaseKey = kebabCase(key)
-        if (Array.isArray(options[key])) {
-            result[kebabCaseKey] = (options[key] as string[]).join('\n')
+        if (Array.isArray(val)) {
+            result[kebabCaseKey] = (val as string[]).join('\n')
         } else {
-            result[kebabCaseKey] = `${options[key]}`
+            result[kebabCaseKey] = `${val}`
         }
     })
     return result
