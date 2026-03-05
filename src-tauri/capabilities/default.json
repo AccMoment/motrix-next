@@ -48,6 +48,7 @@
         }
       ]
     },
+    "clipboard-manager:allow-read-text",
     "autostart:default",
     "updater:default"
   ]

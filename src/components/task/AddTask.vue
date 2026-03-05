@@ -88,9 +88,20 @@ onMounted(async () => {
 watch(() => props.type, (val) => { if (val) activeTab.value = val })
 
 watch(() => props.show, async (visible) => {
-  if (visible && appStore.droppedTorrentPaths.length > 0) {
+  if (!visible) return
+  if (appStore.droppedTorrentPaths.length > 0) {
     activeTab.value = ADD_TASK_TYPE.TORRENT
     await loadTorrentFromPath(appStore.droppedTorrentPaths[0])
+    return
+  }
+  if (activeTab.value === ADD_TASK_TYPE.URI && !form.value.uris) {
+    try {
+      const { readText } = await import('@tauri-apps/plugin-clipboard-manager')
+      const text = await readText()
+      if (text && detectResource(text)) {
+        form.value.uris = text.trim()
+      }
+    } catch {}
   }
 })
 

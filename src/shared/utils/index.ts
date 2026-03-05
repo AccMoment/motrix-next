@@ -149,6 +149,7 @@ export const localeDateTimeFormat = (timestamp: number | string, locale: string)
 }
 
 export const ellipsis = (str = '', maxLen = 64): string => {
+    if (!str) return ''
     if (str.length < maxLen) return str
     if (maxLen > 0) return `${str.substring(0, maxLen)}...`
     return str
@@ -186,8 +187,9 @@ export const getFileNameFromFile = (file?: TaskFile): string => {
     if (!file) return ''
     let { path } = file
     if (!path && file.uris && file.uris.length > 0) {
-        path = decodeURI(file.uris[0].uri)
+        path = decodeURI(file.uris[0]?.uri || '')
     }
+    if (!path) return ''
     const index = path.lastIndexOf('/')
     if (index <= 0 || index === path.length) return path
     return path.substring(index + 1)
@@ -200,13 +202,14 @@ export const getTaskName = (task: Task | null, options: { defaultName?: string; 
     if (!task) return result
 
     const { files, bittorrent } = task
+    if (!files || files.length === 0) return result
     const total = files.length
 
     if (bittorrent && bittorrent.info && bittorrent.info.name) {
         result = ellipsis(bittorrent.info.name, maxLen)
     } else if (total === 1) {
-        result = getFileNameFromFile(files[0])
-        result = ellipsis(result, maxLen)
+        const name = getFileNameFromFile(files[0])
+        result = name ? ellipsis(name, maxLen) : result
     }
 
     return result
