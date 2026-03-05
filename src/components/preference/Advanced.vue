@@ -331,11 +331,6 @@ onMounted(() => {
           </NButton>
         </NInputGroup>
       </NFormItem>
-      <NFormItem :show-label="false">
-        <a target="_blank" href="https://github.com/AnInsomniacy/motrix-next/wiki/RPC" rel="noopener noreferrer" class="info-link">
-          {{ t('preferences.rpc-secret-tips') }} ↗
-        </a>
-      </NFormItem>
 
       <NDivider title-placement="left">{{ t('preferences.port') }}</NDivider>
       <NFormItem label="UPnP/NAT-PMP">

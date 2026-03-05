@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NModal, NCard, NIcon, NButton, NTag, NDivider } from 'naive-ui'
 import { LogoGithub, HeartOutline, DocumentTextOutline, RocketOutline } from '@vicons/ionicons5'
+import { open } from '@tauri-apps/plugin-shell'
 import { getVersion } from '@tauri-apps/api/app'
 
 defineProps<{ show: boolean }>()
@@ -24,7 +25,7 @@ const techStack = [
 ]
 
 function openUrl(url: string) {
-  window.open(url, '_blank')
+  open(url)
 }
 </script>
 
