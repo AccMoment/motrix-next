@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Підтвердження виходу',
   'confirm-exit-message': 'Ви впевнені, що хочете вийти? Активні завантаження буде призупинено.',
   'engine-not-ready': 'Рушій запускається, зачекайте...',
-  'new-version-available': 'Доступна нова версія'
+  'new-version-available': 'Доступна нова версія',
+  'tray-new-task': 'Нове завдання',
+  'tray-resume-all': 'Відновити всі',
+  'tray-pause-all': 'Призупинити всі',
+  'menu-new-task': 'Нове завдання',
+  'menu-open-torrent': 'Відкрити Torrent-файл...',
+  'menu-preferences': 'Налаштування...',
+  'menu-release-notes': 'Примітки до випуску',
+  'menu-report-issue': 'Повідомити про проблему'
 }

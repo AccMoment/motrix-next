@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Beenden bestätigen',
   'confirm-exit-message': 'Möchten Sie wirklich beenden? Aktive Downloads werden pausiert.',
   'engine-not-ready': 'Engine wird gestartet, bitte warten...',
-  'new-version-available': 'Neue Version verfügbar'
+  'new-version-available': 'Neue Version verfügbar',
+  'tray-new-task': 'Neue Aufgabe',
+  'tray-resume-all': 'Alle fortsetzen',
+  'tray-pause-all': 'Alle pausieren',
+  'menu-new-task': 'Neue Aufgabe',
+  'menu-open-torrent': 'Torrent-Datei öffnen...',
+  'menu-preferences': 'Einstellungen...',
+  'menu-release-notes': 'Versionshinweise',
+  'menu-report-issue': 'Problem melden'
 }

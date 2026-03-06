@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'تأیید خروج',
   'confirm-exit-message': 'آیا مطمئن هستید که می‌خواهید خارج شوید؟ دانلودهای فعال متوقف خواهند شد.',
   'engine-not-ready': 'موتور در حال راه‌اندازی است، لطفاً صبر کنید...',
-  'new-version-available': 'نسخه جدید موجود است'
+  'new-version-available': 'نسخه جدید موجود است',
+  'tray-new-task': 'وظیفه جدید',
+  'tray-resume-all': 'ادامه همه',
+  'tray-pause-all': 'توقف همه',
+  'menu-new-task': 'وظیفه جدید',
+  'menu-open-torrent': 'باز کردن فایل Torrent...',
+  'menu-preferences': 'تنظیمات...',
+  'menu-release-notes': 'یادداشت‌های انتشار',
+  'menu-report-issue': 'گزارش مشکل'
 }

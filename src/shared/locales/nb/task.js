@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Tips: stopp oppgaven for å avslutte delingen',
   'bt-stopping-seeding-tip': 'Stopper deling. Frakoblingen kan ta et øyeblikk...',
   'download-fail-message': 'Nedlasting av {{taskName}} mislyktes',
-  'download-fail-notify': 'Nedlasting mislyktes'
+  'download-fail-notify': 'Nedlasting mislyktes',
+  'status-active': 'Laster ned',
+  'status-waiting': 'Venter',
+  'status-paused': 'Satt på pause',
+  'status-complete': 'Fullført',
+  'status-error': 'Feil',
+  'status-removed': 'Fjernet',
+  'status-seeding': 'Deling'
 }

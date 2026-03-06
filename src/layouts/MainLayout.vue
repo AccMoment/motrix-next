@@ -130,6 +130,29 @@ onMounted(async () => {
       showExitDialog.value = true
     }
   })
+
+  // Sync native menu labels with current locale
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('update_tray_menu_labels', {
+      labels: {
+        'show': t('app.show'),
+        'tray-new-task': t('app.tray-new-task'),
+        'tray-resume-all': t('app.tray-resume-all'),
+        'tray-pause-all': t('app.tray-pause-all'),
+        'tray-quit': t('app.quit'),
+      }
+    })
+    await invoke('update_menu_labels', {
+      labels: {
+        'new-task': t('app.menu-new-task'),
+        'open-torrent': t('app.menu-open-torrent'),
+        'preferences': t('app.menu-preferences'),
+        'release-notes': t('app.menu-release-notes'),
+        'report-issue': t('app.menu-report-issue'),
+      }
+    })
+  } catch { /* tray/menu not available */ }
 })
 
 onUnmounted(() => {

@@ -53,7 +53,12 @@ function switchTab(key: string) {
 
 const isBT = computed(() => props.task ? checkTaskIsBT(props.task as never) : false)
 const isSeeder = computed(() => props.task ? checkTaskIsSeeder(props.task as never) : false)
-const taskStatus = computed(() => isSeeder.value ? TASK_STATUS.SEEDING : (props.task?.status as string))
+const taskStatusKey = computed(() => isSeeder.value ? TASK_STATUS.SEEDING : (props.task?.status as string))
+const taskStatus = computed(() => {
+  const key = taskStatusKey.value
+  const translated = t(`task.status-${key}`)
+  return translated !== `task.status-${key}` ? translated : key
+})
 const isActive = computed(() => props.task?.status === TASK_STATUS.ACTIVE)
 const taskFullName = computed(() =>
   props.task ? getTaskName(props.task as never, { defaultName: 'Unknown', maxLen: -1 }) : ''
@@ -95,7 +100,7 @@ const btInfo = computed(() => {
 })
 
 const statusTagType = computed(() => {
-  switch (taskStatus.value) {
+  switch (taskStatusKey.value) {
     case 'active': return 'warning'
     case 'complete': return 'success'
     case 'error': return 'error'
@@ -141,8 +146,8 @@ const peers = computed(() => {
 })
 
 const peerColumns = [
-  { title: 'Host', key: 'host', minWidth: 140 },
-  { title: 'Client', key: 'client', minWidth: 120 },
+  { title: t('task.task-peer-host') || 'Host', key: 'host', minWidth: 140 },
+  { title: t('task.task-peer-client') || 'Client', key: 'client', minWidth: 120 },
   { title: '%', key: 'percent', width: 60, align: 'right' as const },
   { title: '↑', key: 'uploadSpeed', width: 100, align: 'right' as const },
   { title: '↓', key: 'downloadSpeed', width: 100, align: 'right' as const },
@@ -185,7 +190,7 @@ function handleClose() {
         <Transition :name="`tab-slide-${slideDirection}`" mode="out-in">
           <div v-if="activeTab === 'general'" key="general" class="tab-content">
             <template v-if="task">
-              <NDescriptions :column="1" label-placement="left" bordered size="small" :label-style="{ minWidth: '100px', whiteSpace: 'nowrap' }">
+              <NDescriptions :column="1" label-placement="left" bordered size="small" :label-style="{ width: '1px', whiteSpace: 'nowrap' }">
                 <NDescriptionsItem :label="t('task.task-gid') || 'GID'">{{ task.gid }}</NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-name') || 'Name'">{{ taskFullName }}</NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-dir') || 'Directory'">{{ task.dir }}</NDescriptionsItem>
@@ -201,7 +206,7 @@ function handleClose() {
               </NDescriptions>
               <template v-if="isBT && btInfo">
                 <div class="section-divider">BitTorrent</div>
-                <NDescriptions :column="1" label-placement="left" bordered size="small">
+                <NDescriptions :column="1" label-placement="left" bordered size="small" :label-style="{ width: '1px', whiteSpace: 'nowrap' }">
                   <NDescriptionsItem :label="t('task.task-info-hash') || 'Hash'">{{ task.infoHash }}</NDescriptionsItem>
                   <NDescriptionsItem :label="t('task.task-piece-length') || 'Piece Size'">{{ bytesToSize(String(task.pieceLength)) }}</NDescriptionsItem>
                   <NDescriptionsItem :label="t('task.task-num-pieces') || 'Pieces'">{{ task.numPieces }}</NDescriptionsItem>

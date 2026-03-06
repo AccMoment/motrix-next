@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Nota: detenga la tarea para finalizar la siembra',
   'bt-stopping-seeding-tip': 'Deteniendo siembra. La desconexión puede tardar un momento...',
   'download-fail-message': 'Error al descargar {{taskName}}',
-  'download-fail-notify': 'Descarga fallida'
+  'download-fail-notify': 'Descarga fallida',
+  'status-active': 'Descargando',
+  'status-waiting': 'En espera',
+  'status-paused': 'Pausado',
+  'status-complete': 'Completado',
+  'status-error': 'Error',
+  'status-removed': 'Eliminado',
+  'status-seeding': 'Compartiendo'
 }

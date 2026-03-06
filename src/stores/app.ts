@@ -72,7 +72,17 @@ export const useAppStore = defineStore('app', () => {
         addTaskOptions.value = { ...options }
     }
 
-    async function fetchGlobalStat(api: { getGlobalStat: () => Promise<Record<string, string>> }) {
+    const compactSize = (b: number) => {
+        if (b < 1024) return `${b}B`
+        if (b < 1048576) return `${(b / 1024).toFixed(0)}K`
+        if (b < 1073741824) return `${(b / 1048576).toFixed(1)}M`
+        return `${(b / 1073741824).toFixed(2)}G`
+    }
+
+    async function fetchGlobalStat(api: {
+        getGlobalStat: () => Promise<Record<string, string>>,
+        fetchActiveTaskList?: () => Promise<{ totalLength: string; completedLength: string }[]>
+    }) {
         try {
             const data = await api.getGlobalStat()
             const parsed: Record<string, number> = {}
@@ -89,18 +99,47 @@ export const useAppStore = defineStore('app', () => {
             }
             stat.value = parsed as typeof stat.value
 
-            // Update tray speed display (macOS only, Linux partial)
             try {
                 const prefStore = (await import('@/stores/preference')).usePreferenceStore()
+
+                // Tray speed display (macOS menu bar)
                 if (prefStore.config?.traySpeedometer && (parsed.downloadSpeed > 0 || parsed.uploadSpeed > 0)) {
-                    const parts: string[] = []
-                    if (parsed.downloadSpeed > 0) parts.push(`↓ ${bytesToSize(parsed.downloadSpeed)}/s`)
-                    if (parsed.uploadSpeed > 0) parts.push(`↑ ${bytesToSize(parsed.uploadSpeed)}/s`)
-                    await invoke('update_tray_title', { title: parts.join(' ') })
+                    const title = parsed.downloadSpeed > 0
+                        ? `↓${compactSize(parsed.downloadSpeed)}`
+                        : `↑${compactSize(parsed.uploadSpeed)}`
+                    await invoke('update_tray_title', { title })
                 } else {
                     await invoke('update_tray_title', { title: '' })
                 }
-            } catch { /* tray not available */ }
+
+                // Dock badge speed (macOS)
+                if (parsed.downloadSpeed > 0) {
+                    await invoke('update_dock_badge', { label: `${compactSize(parsed.downloadSpeed)}/s` })
+                } else {
+                    await invoke('update_dock_badge', { label: '' })
+                }
+
+                // Dock progress bar (macOS/Windows)
+                if (prefStore.config?.showProgressBar && numActive > 0 && api.fetchActiveTaskList) {
+                    try {
+                        const tasks = await api.fetchActiveTaskList()
+                        const totalLen = tasks.reduce((s, t) => s + Number(t.totalLength), 0)
+                        const completedLen = tasks.reduce((s, t) => s + Number(t.completedLength), 0)
+                        if (totalLen > 0) {
+                            const prog = completedLen / totalLen
+                            progress.value = prog
+                            await invoke('update_progress_bar', { progress: prog })
+                        } else {
+                            // Tasks active but unknown size (e.g. metadata)
+                            progress.value = 0
+                            await invoke('update_progress_bar', { progress: 0.0 })
+                        }
+                    } catch { /* fallback */ }
+                } else {
+                    progress.value = -1
+                    await invoke('update_progress_bar', { progress: -1.0 })
+                }
+            } catch { /* tray/dock not available */ }
         } catch (e) {
             console.warn((e as Error).message)
         }
@@ -115,31 +154,6 @@ export const useAppStore = defineStore('app', () => {
         const data = await api.getGlobalOption()
         engineOptions.value = { ...engineOptions.value, ...data }
         return data
-    }
-
-    async function fetchProgress(api: { fetchActiveTaskList: () => Promise<{ totalLength: string; completedLength: string }[]> }) {
-        try {
-            const data = await api.fetchActiveTaskList()
-            let prog = -1
-            if (data.length !== 0) {
-                const tasks = data.map((t) => ({
-                    totalLength: Number(t.totalLength),
-                    completedLength: Number(t.completedLength),
-                }))
-                const realTotal = tasks.reduce((total, task) => total + task.totalLength, 0)
-                if (realTotal === 0) {
-                    prog = 2
-                } else {
-                    const filtered = tasks.filter((task) => task.totalLength !== 0)
-                    const completed = filtered.reduce((total, task) => total + task.completedLength, 0)
-                    const total = filtered.reduce((total, task) => total + task.totalLength, 0)
-                    prog = completed / total
-                }
-            }
-            progress.value = prog
-        } catch (e) {
-            console.warn((e as Error).message)
-        }
     }
 
     function handleDeepLinkUrls(urls: string[]) {
@@ -193,7 +207,6 @@ export const useAppStore = defineStore('app', () => {
         fetchGlobalStat,
         fetchEngineInfo,
         fetchEngineOptions,
-        fetchProgress,
         handleDeepLinkUrls,
     }
 })

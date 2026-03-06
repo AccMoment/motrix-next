@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Catatan: hentikan tugas untuk mengakhiri berbagi',
   'bt-stopping-seeding-tip': 'Menghentikan berbagi. Pemutusan koneksi mungkin memerlukan waktu...',
   'download-fail-message': 'Unduhan {{taskName}} gagal',
-  'download-fail-notify': 'Unduhan gagal'
+  'download-fail-notify': 'Unduhan gagal',
+  'status-active': 'Mengunduh',
+  'status-waiting': 'Menunggu',
+  'status-paused': 'Dijeda',
+  'status-complete': 'Selesai',
+  'status-error': 'Kesalahan',
+  'status-removed': 'Dihapus',
+  'status-seeding': 'Berbagi'
 }

@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Kilépés megerősítése',
   'confirm-exit-message': 'Biztosan ki szeretne lépni? Az aktív letöltések szünetelni fognak.',
   'engine-not-ready': 'A motor elindul, kérjük várjon...',
-  'new-version-available': 'Új verzió elérhető'
+  'new-version-available': 'Új verzió elérhető',
+  'tray-new-task': 'Új feladat',
+  'tray-resume-all': 'Összes folytatása',
+  'tray-pause-all': 'Összes szüneteltetése',
+  'menu-new-task': 'Új feladat',
+  'menu-open-torrent': 'Torrent fájl megnyitása...',
+  'menu-preferences': 'Beállítások...',
+  'menu-release-notes': 'Kiadási megjegyzések',
+  'menu-report-issue': 'Hiba bejelentése'
 }

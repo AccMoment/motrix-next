@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Sfat: opriți sarcina pentru a înceta distribuirea',
   'bt-stopping-seeding-tip': 'Se oprește distribuirea. Deconectarea poate dura un moment...',
   'download-fail-message': 'Descărcarea {{taskName}} a eșuat',
-  'download-fail-notify': 'Descărcarea a eșuat'
+  'download-fail-notify': 'Descărcarea a eșuat',
+  'status-active': 'Se descarcă',
+  'status-waiting': 'În așteptare',
+  'status-paused': 'În pauză',
+  'status-complete': 'Finalizat',
+  'status-error': 'Eroare',
+  'status-removed': 'Eliminat',
+  'status-seeding': 'Partajare'
 }

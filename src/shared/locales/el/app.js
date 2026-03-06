@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Επιβεβαίωση εξόδου',
   'confirm-exit-message': 'Σίγουρα θέλετε να βγείτε; Οι ενεργές λήψεις θα τεθούν σε παύση.',
   'engine-not-ready': 'Η μηχανή εκκινεί, παρακαλώ περιμένετε...',
-  'new-version-available': 'Νέα έκδοση διαθέσιμη'
+  'new-version-available': 'Νέα έκδοση διαθέσιμη',
+  'tray-new-task': 'Νέα εργασία',
+  'tray-resume-all': 'Συνέχιση όλων',
+  'tray-pause-all': 'Παύση όλων',
+  'menu-new-task': 'Νέα εργασία',
+  'menu-open-torrent': 'Άνοιγμα αρχείου Torrent...',
+  'menu-preferences': 'Προτιμήσεις...',
+  'menu-release-notes': 'Σημειώσεις έκδοσης',
+  'menu-report-issue': 'Αναφορά προβλήματος'
 }

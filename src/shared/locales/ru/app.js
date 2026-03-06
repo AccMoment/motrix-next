@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Подтвердите выход',
   'confirm-exit-message': 'Вы уверены, что хотите выйти? Активные загрузки будут приостановлены.',
   'engine-not-ready': 'Движок запускается, подождите...',
-  'new-version-available': 'Доступна новая версия'
+  'new-version-available': 'Доступна новая версия',
+  'tray-new-task': 'Новая задача',
+  'tray-resume-all': 'Возобновить все',
+  'tray-pause-all': 'Приостановить все',
+  'menu-new-task': 'Новая задача',
+  'menu-open-torrent': 'Открыть торрент-файл...',
+  'menu-preferences': 'Настройки...',
+  'menu-release-notes': 'Примечания к выпуску',
+  'menu-report-issue': 'Сообщить о проблеме'
 }

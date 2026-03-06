@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Wskazówka: zatrzymaj zadanie, aby zakończyć udostępnianie',
   'bt-stopping-seeding-tip': 'Zatrzymywanie udostępniania. Rozłączanie może chwilę potrwać...',
   'download-fail-message': 'Pobieranie {{taskName}} nie powiodło się',
-  'download-fail-notify': 'Pobieranie nie powiodło się'
+  'download-fail-notify': 'Pobieranie nie powiodło się',
+  'status-active': 'Pobieranie',
+  'status-waiting': 'Oczekiwanie',
+  'status-paused': 'Wstrzymano',
+  'status-complete': 'Ukończono',
+  'status-error': 'Błąd',
+  'status-removed': 'Usunięto',
+  'status-seeding': 'Udostępnianie'
 }

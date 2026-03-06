@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Afsluiten bevestigen',
   'confirm-exit-message': 'Weet u zeker dat u wilt afsluiten? Actieve downloads worden gepauzeerd.',
   'engine-not-ready': 'Engine wordt gestart, even geduld...',
-  'new-version-available': 'Nieuwe versie beschikbaar'
+  'new-version-available': 'Nieuwe versie beschikbaar',
+  'tray-new-task': 'Nieuwe taak',
+  'tray-resume-all': 'Alles hervatten',
+  'tray-pause-all': 'Alles pauzeren',
+  'menu-new-task': 'Nieuwe taak',
+  'menu-open-torrent': 'Torrent-bestand openen...',
+  'menu-preferences': 'Voorkeuren...',
+  'menu-release-notes': 'Uitgavenotities',
+  'menu-report-issue': 'Probleem melden'
 }

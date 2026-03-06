@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': '提示：可停止任務以結束做種',
   'bt-stopping-seeding-tip': '正在停止做種，中斷連線需要一些時間，請耐心等候...',
   'download-fail-message': '{{taskName}} 下載失敗',
-  'download-fail-notify': '下載失敗'
+  'download-fail-notify': '下載失敗',
+  'status-active': '下載中',
+  'status-waiting': '等待中',
+  'status-paused': '已暫停',
+  'status-complete': '已完成',
+  'status-error': '錯誤',
+  'status-removed': '已刪除',
+  'status-seeding': '做種中'
 }

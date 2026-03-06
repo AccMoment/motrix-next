@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Tip: stop de taak om het seeden te beëindigen',
   'bt-stopping-seeding-tip': 'Seeden wordt gestopt. Het verbreken van de verbinding kan even duren...',
   'download-fail-message': 'Download van {{taskName}} mislukt',
-  'download-fail-notify': 'Download mislukt'
+  'download-fail-notify': 'Download mislukt',
+  'status-active': 'Downloaden',
+  'status-waiting': 'Wachtend',
+  'status-paused': 'Gepauzeerd',
+  'status-complete': 'Voltooid',
+  'status-error': 'Fout',
+  'status-removed': 'Verwijderd',
+  'status-seeding': 'Seeden'
 }

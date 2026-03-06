@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Nota: atureu la tasca per finalitzar la compartició',
   'bt-stopping-seeding-tip': 'Aturant la compartició. La desconnexió pot trigar un moment...',
   'download-fail-message': 'Error en descarregar {{taskName}}',
-  'download-fail-notify': 'Descàrrega fallida'
+  'download-fail-notify': 'Descàrrega fallida',
+  'status-active': 'Descarregant',
+  'status-waiting': 'En espera',
+  'status-paused': 'En pausa',
+  'status-complete': 'Completat',
+  'status-error': 'Error',
+  'status-removed': 'Eliminat',
+  'status-seeding': 'Compartint'
 }

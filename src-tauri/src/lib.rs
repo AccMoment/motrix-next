@@ -50,12 +50,17 @@ pub fn run() {
             commands::restart_engine_command,
             commands::factory_reset,
             commands::update_tray_title,
+            commands::update_tray_menu_labels,
+            commands::update_menu_labels,
+            commands::update_progress_bar,
+            commands::update_dock_badge,
         ])
         .setup(|app| {
             let handle = app.handle();
             let m = menu::build_menu(handle)?;
             app.set_menu(m)?;
-            tray::setup_tray(handle)?;
+            let tray_state = tray::setup_tray(handle)?;
+            app.manage(tray_state);
 
             app.on_menu_event(|app, event| match event.id().as_ref() {
                 "new-task" => {

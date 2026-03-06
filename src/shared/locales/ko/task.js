@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': '힌트: 작업을 중지하면 시딩이 종료됩니다',
   'bt-stopping-seeding-tip': '시딩 중지 중입니다. 연결 해제에 시간이 걸릴 수 있습니다...',
   'download-fail-message': '{{taskName}} 다운로드 실패',
-  'download-fail-notify': '다운로드 실패'
+  'download-fail-notify': '다운로드 실패',
+  'status-active': '다운로드 중',
+  'status-waiting': '대기 중',
+  'status-paused': '일시정지',
+  'status-complete': '완료',
+  'status-error': '오류',
+  'status-removed': '삭제됨',
+  'status-seeding': '시딩 중'
 }

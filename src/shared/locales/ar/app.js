@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'تأكيد الخروج',
   'confirm-exit-message': 'هل أنت متأكد من الخروج؟ سيتم إيقاف التنزيلات النشطة مؤقتًا.',
   'engine-not-ready': 'المحرك قيد التشغيل، يرجى الانتظار...',
-  'new-version-available': 'إصدار جديد متاح'
+  'new-version-available': 'إصدار جديد متاح',
+  'tray-new-task': 'مهمة جديدة',
+  'tray-resume-all': 'استئناف الكل',
+  'tray-pause-all': 'إيقاف الكل مؤقتاً',
+  'menu-new-task': 'مهمة جديدة',
+  'menu-open-torrent': 'فتح ملف Torrent...',
+  'menu-preferences': 'التفضيلات...',
+  'menu-release-notes': 'ملاحظات الإصدار',
+  'menu-report-issue': 'الإبلاغ عن مشكلة'
 }

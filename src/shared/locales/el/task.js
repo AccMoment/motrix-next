@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Σημείωση: σταματήστε την εργασία για να τερματίσετε τον διαμοιρασμό',
   'bt-stopping-seeding-tip': 'Διακοπή διαμοιρασμού. Η αποσύνδεση μπορεί να πάρει λίγο...',
   'download-fail-message': 'Η λήψη του {{taskName}} απέτυχε',
-  'download-fail-notify': 'Η λήψη απέτυχε'
+  'download-fail-notify': 'Η λήψη απέτυχε',
+  'status-active': 'Λήψη',
+  'status-waiting': 'Αναμονή',
+  'status-paused': 'Σε παύση',
+  'status-complete': 'Ολοκληρώθηκε',
+  'status-error': 'Σφάλμα',
+  'status-removed': 'Αφαιρέθηκε',
+  'status-seeding': 'Διαμοιρασμός'
 }

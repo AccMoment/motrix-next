@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Tipp: állítsa le a feladatot a megosztás befejezéséhez',
   'bt-stopping-seeding-tip': 'Megosztás leállítása. A leválasztás eltarthat egy pillanatig...',
   'download-fail-message': '{{taskName}} letöltése sikertelen',
-  'download-fail-notify': 'Letöltés sikertelen'
+  'download-fail-notify': 'Letöltés sikertelen',
+  'status-active': 'Letöltés',
+  'status-waiting': 'Várakozás',
+  'status-paused': 'Szüneteltetve',
+  'status-complete': 'Befejezve',
+  'status-error': 'Hiba',
+  'status-removed': 'Eltávolítva',
+  'status-seeding': 'Megosztás'
 }

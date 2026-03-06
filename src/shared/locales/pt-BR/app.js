@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Confirmar saída',
   'confirm-exit-message': 'Tem certeza que deseja sair? Downloads ativos serão pausados.',
   'engine-not-ready': 'O mecanismo está iniciando, aguarde...',
-  'new-version-available': 'Nova versão disponível'
+  'new-version-available': 'Nova versão disponível',
+  'tray-new-task': 'Nova tarefa',
+  'tray-resume-all': 'Retomar tudo',
+  'tray-pause-all': 'Pausar tudo',
+  'menu-new-task': 'Nova tarefa',
+  'menu-open-torrent': 'Abrir arquivo Torrent...',
+  'menu-preferences': 'Preferências...',
+  'menu-release-notes': 'Notas da versão',
+  'menu-report-issue': 'Relatar problema'
 }

@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Подсказка: остановите задачу для прекращения раздачи',
   'bt-stopping-seeding-tip': 'Остановка раздачи. Отключение может занять некоторое время...',
   'download-fail-message': 'Загрузка {{taskName}} не удалась',
-  'download-fail-notify': 'Загрузка не удалась'
+  'download-fail-notify': 'Загрузка не удалась',
+  'status-active': 'Загрузка',
+  'status-waiting': 'Ожидание',
+  'status-paused': 'Приостановлено',
+  'status-complete': 'Завершено',
+  'status-error': 'Ошибка',
+  'status-removed': 'Удалено',
+  'status-seeding': 'Раздача'
 }

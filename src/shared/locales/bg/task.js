@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Съвет: спрете задачата, за да прекратите споделянето',
   'bt-stopping-seeding-tip': 'Спиране на споделянето. Прекъсването на връзката може да отнеме малко...',
   'download-fail-message': 'Изтеглянето на {{taskName}} е неуспешно',
-  'download-fail-notify': 'Изтеглянето е неуспешно'
+  'download-fail-notify': 'Изтеглянето е неуспешно',
+  'status-active': 'Изтегляне',
+  'status-waiting': 'Изчакване',
+  'status-paused': 'Пауза',
+  'status-complete': 'Завършено',
+  'status-error': 'Грешка',
+  'status-removed': 'Премахнато',
+  'status-seeding': 'Споделяне'
 }

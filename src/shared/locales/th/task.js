@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'หมายเหตุ: หยุดงานเพื่อหยุดการแชร์',
   'bt-stopping-seeding-tip': 'กำลังหยุดแชร์ การตัดการเชื่อมต่ออาจใช้เวลาสักครู่...',
   'download-fail-message': 'ดาวน์โหลด {{taskName}} ไม่สำเร็จ',
-  'download-fail-notify': 'ดาวน์โหลดไม่สำเร็จ'
+  'download-fail-notify': 'ดาวน์โหลดไม่สำเร็จ',
+  'status-active': 'กำลังดาวน์โหลด',
+  'status-waiting': 'รอดำเนินการ',
+  'status-paused': 'หยุดชั่วคราว',
+  'status-complete': 'เสร็จสมบูรณ์',
+  'status-error': 'ข้อผิดพลาด',
+  'status-removed': 'ถูกลบ',
+  'status-seeding': 'กำลังแชร์'
 }

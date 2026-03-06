@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'ヒント：タスクを停止するとシードが終了します',
   'bt-stopping-seeding-tip': 'シードを停止中です。切断に少し時間がかかります。お待ちください...',
   'download-fail-message': '{{taskName}} のダウンロードに失敗',
-  'download-fail-notify': 'ダウンロード失敗'
+  'download-fail-notify': 'ダウンロード失敗',
+  'status-active': 'ダウンロード中',
+  'status-waiting': '待機中',
+  'status-paused': '一時停止',
+  'status-complete': '完了',
+  'status-error': 'エラー',
+  'status-removed': '削除済み',
+  'status-seeding': 'シード中'
 }

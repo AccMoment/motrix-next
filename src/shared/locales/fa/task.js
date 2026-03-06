@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'نکته: وظیفه را متوقف کنید تا اشتراک‌گذاری پایان یابد',
   'bt-stopping-seeding-tip': 'در حال توقف اشتراک‌گذاری. قطع اتصال ممکن است کمی طول بکشد...',
   'download-fail-message': 'دانلود {{taskName}} ناموفق بود',
-  'download-fail-notify': 'دانلود ناموفق بود'
+  'download-fail-notify': 'دانلود ناموفق بود',
+  'status-active': 'در حال دانلود',
+  'status-waiting': 'در انتظار',
+  'status-paused': 'متوقف',
+  'status-complete': 'تکمیل شده',
+  'status-error': 'خطا',
+  'status-removed': 'حذف شده',
+  'status-seeding': 'اشتراک‌گذاری'
 }

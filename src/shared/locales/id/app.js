@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Konfirmasi keluar',
   'confirm-exit-message': 'Yakin ingin keluar? Unduhan aktif akan dijeda.',
   'engine-not-ready': 'Mesin sedang dimulai, harap tunggu...',
-  'new-version-available': 'Versi baru tersedia'
+  'new-version-available': 'Versi baru tersedia',
+  'tray-new-task': 'Tugas baru',
+  'tray-resume-all': 'Lanjutkan semua',
+  'tray-pause-all': 'Jeda semua',
+  'menu-new-task': 'Tugas baru',
+  'menu-open-torrent': 'Buka file Torrent...',
+  'menu-preferences': 'Preferensi...',
+  'menu-release-notes': 'Catatan rilis',
+  'menu-report-issue': 'Laporkan masalah'
 }

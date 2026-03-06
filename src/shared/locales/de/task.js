@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Hinweis: Aufgabe stoppen um Seeding zu beenden',
   'bt-stopping-seeding-tip': 'Seeding wird gestoppt. Das Trennen kann einen Moment dauern...',
   'download-fail-message': 'Download von {{taskName}} fehlgeschlagen',
-  'download-fail-notify': 'Download fehlgeschlagen'
+  'download-fail-notify': 'Download fehlgeschlagen',
+  'status-active': 'Wird heruntergeladen',
+  'status-waiting': 'Wartend',
+  'status-paused': 'Pausiert',
+  'status-complete': 'Abgeschlossen',
+  'status-error': 'Fehler',
+  'status-removed': 'Entfernt',
+  'status-seeding': 'Seeding'
 }

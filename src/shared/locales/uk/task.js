@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Підказка: зупиніть завдання для припинення роздачі',
   'bt-stopping-seeding-tip': 'Зупинка роздачі. Від\'єднання може зайняти деякий час...',
   'download-fail-message': 'Завантаження {{taskName}} не вдалося',
-  'download-fail-notify': 'Завантаження не вдалося'
+  'download-fail-notify': 'Завантаження не вдалося',
+  'status-active': 'Завантаження',
+  'status-waiting': 'Очікування',
+  'status-paused': 'Призупинено',
+  'status-complete': 'Завершено',
+  'status-error': 'Помилка',
+  'status-removed': 'Видалено',
+  'status-seeding': 'Роздача'
 }

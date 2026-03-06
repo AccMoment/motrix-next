@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'İpucu: paylaşımı sonlandırmak için görevi durdurun',
   'bt-stopping-seeding-tip': 'Paylaşım durduruluyor. Bağlantı kesme biraz zaman alabilir...',
   'download-fail-message': '{{taskName}} indirmesi başarısız',
-  'download-fail-notify': 'İndirme başarısız'
+  'download-fail-notify': 'İndirme başarısız',
+  'status-active': 'İndiriliyor',
+  'status-waiting': 'Bekliyor',
+  'status-paused': 'Duraklatıldı',
+  'status-complete': 'Tamamlandı',
+  'status-error': 'Hata',
+  'status-removed': 'Kaldırıldı',
+  'status-seeding': 'Paylaşılıyor'
 }

@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Astuce : arrêtez la tâche pour cesser le partage',
   'bt-stopping-seeding-tip': 'Arrêt du partage en cours. La déconnexion peut prendre un moment...',
   'download-fail-message': 'Échec du téléchargement de {{taskName}}',
-  'download-fail-notify': 'Échec du téléchargement'
+  'download-fail-notify': 'Échec du téléchargement',
+  'status-active': 'Téléchargement',
+  'status-waiting': 'En attente',
+  'status-paused': 'En pause',
+  'status-complete': 'Terminé',
+  'status-error': 'Erreur',
+  'status-removed': 'Supprimé',
+  'status-seeding': 'Partage'
 }

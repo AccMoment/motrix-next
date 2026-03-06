@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Confirmă ieșirea',
   'confirm-exit-message': 'Sigur doriți să ieșiți? Descărcările active vor fi suspendate.',
   'engine-not-ready': 'Motorul pornește, vă rugăm așteptați...',
-  'new-version-available': 'Versiune nouă disponibilă'
+  'new-version-available': 'Versiune nouă disponibilă',
+  'tray-new-task': 'Sarcină nouă',
+  'tray-resume-all': 'Reia toate',
+  'tray-pause-all': 'Pune pe pauză toate',
+  'menu-new-task': 'Sarcină nouă',
+  'menu-open-torrent': 'Deschide fișier Torrent...',
+  'menu-preferences': 'Preferințe...',
+  'menu-release-notes': 'Note de lansare',
+  'menu-report-issue': 'Raportare problemă'
 }

@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Confirmar sortida',
   'confirm-exit-message': 'Segur que voleu sortir? Les descàrregues actives es posaran en pausa.',
   'engine-not-ready': 'El motor s\'està iniciant, si us plau espereu...',
-  'new-version-available': 'Nova versió disponible'
+  'new-version-available': 'Nova versió disponible',
+  'tray-new-task': 'Nova tasca',
+  'tray-resume-all': 'Reprendre tot',
+  'tray-pause-all': 'Pausar tot',
+  'menu-new-task': 'Nova tasca',
+  'menu-open-torrent': 'Obrir fitxer Torrent...',
+  'menu-preferences': 'Preferències...',
+  'menu-release-notes': 'Notes de la versió',
+  'menu-report-issue': 'Informar d\'un problema'
 }

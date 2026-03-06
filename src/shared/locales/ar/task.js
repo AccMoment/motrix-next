@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'ملاحظة: أوقف المهمة لإنهاء المشاركة',
   'bt-stopping-seeding-tip': 'جارٍ إيقاف المشاركة. قد يستغرق قطع الاتصال بعض الوقت...',
   'download-fail-message': 'فشل تنزيل {{taskName}}',
-  'download-fail-notify': 'فشل التنزيل'
+  'download-fail-notify': 'فشل التنزيل',
+  'status-active': 'جارٍ التنزيل',
+  'status-waiting': 'في الانتظار',
+  'status-paused': 'متوقف مؤقتاً',
+  'status-complete': 'مكتمل',
+  'status-error': 'خطأ',
+  'status-removed': 'محذوف',
+  'status-seeding': 'مشاركة'
 }

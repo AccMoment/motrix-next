@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Nota: interrompere l\'attività per terminare la condivisione',
   'bt-stopping-seeding-tip': 'Interruzione della condivisione in corso. La disconnessione potrebbe richiedere un momento...',
   'download-fail-message': 'Download di {{taskName}} non riuscito',
-  'download-fail-notify': 'Download non riuscito'
+  'download-fail-notify': 'Download non riuscito',
+  'status-active': 'In download',
+  'status-waiting': 'In attesa',
+  'status-paused': 'In pausa',
+  'status-complete': 'Completato',
+  'status-error': 'Errore',
+  'status-removed': 'Rimosso',
+  'status-seeding': 'In condivisione'
 }

@@ -127,5 +127,12 @@ export default {
   'bt-download-complete-tips': 'Lưu ý: dừng tác vụ để kết thúc chia sẻ',
   'bt-stopping-seeding-tip': 'Đang dừng chia sẻ. Ngắt kết nối có thể mất một lúc...',
   'download-fail-message': 'Tải {{taskName}} thất bại',
-  'download-fail-notify': 'Tải xuống thất bại'
+  'download-fail-notify': 'Tải xuống thất bại',
+  'status-active': 'Đang tải',
+  'status-waiting': 'Đang chờ',
+  'status-paused': 'Tạm dừng',
+  'status-complete': 'Hoàn tất',
+  'status-error': 'Lỗi',
+  'status-removed': 'Đã xóa',
+  'status-seeding': 'Đang chia sẻ'
 }

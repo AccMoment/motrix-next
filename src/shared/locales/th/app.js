@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'ยืนยันการออก',
   'confirm-exit-message': 'คุณแน่ใจหรือไม่ว่าต้องการออก? การดาวน์โหลดที่กำลังทำจะถูกหยุดชั่วคราว',
   'engine-not-ready': 'เอนจินกำลังเริ่มต้น กรุณารอ...',
-  'new-version-available': 'มีเวอร์ชันใหม่'
+  'new-version-available': 'มีเวอร์ชันใหม่',
+  'tray-new-task': 'งานใหม่',
+  'tray-resume-all': 'ดำเนินการต่อทั้งหมด',
+  'tray-pause-all': 'หยุดชั่วคราวทั้งหมด',
+  'menu-new-task': 'งานใหม่',
+  'menu-open-torrent': 'เปิดไฟล์ Torrent...',
+  'menu-preferences': 'การตั้งค่า...',
+  'menu-release-notes': 'บันทึกการเปลี่ยนแปลง',
+  'menu-report-issue': 'รายงานปัญหา'
 }

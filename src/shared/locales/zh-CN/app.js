@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': '确认退出',
   'confirm-exit-message': '确定要退出吗？正在进行的下载将被暂停。',
   'engine-not-ready': '引擎正在启动，请稍候...',
-  'new-version-available': '发现新版本'
+  'new-version-available': '发现新版本',
+  'tray-new-task': '新建任务',
+  'tray-resume-all': '全部恢复',
+  'tray-pause-all': '全部暂停',
+  'menu-new-task': '新建任务',
+  'menu-open-torrent': '打开种子文件...',
+  'menu-preferences': '偏好设置...',
+  'menu-release-notes': '更新日志',
+  'menu-report-issue': '反馈问题'
 }

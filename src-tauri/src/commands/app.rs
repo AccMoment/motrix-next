@@ -1,7 +1,10 @@
-use serde_json::Value;
-use tauri::AppHandle;
-use tauri_plugin_store::StoreExt;
 use crate::engine;
+use crate::tray::TrayMenuState;
+use serde_json::Value;
+use tauri::window::ProgressBarState;
+use tauri::AppHandle;
+use tauri::Manager;
+use tauri_plugin_store::StoreExt;
 
 #[tauri::command]
 pub fn get_app_config(app: AppHandle) -> Result<Value, String> {
@@ -77,6 +80,77 @@ pub fn factory_reset(app: AppHandle) -> Result<(), String> {
 pub fn update_tray_title(app: AppHandle, title: String) -> Result<(), String> {
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_title(Some(&title)).map_err(|e| e.to_string())?;
+        // Workaround: re-set icon after set_title to prevent macOS icon disappearing (Tauri/tao bug)
+        if let Some(icon) = app.default_window_icon() {
+            let _ = tray.set_icon(Some(icon.clone()));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_tray_menu_labels(app: AppHandle, labels: Value) -> Result<(), String> {
+    let state = app.state::<TrayMenuState>();
+    let items = state.items.lock().map_err(|e| e.to_string())?;
+    if let Some(obj) = labels.as_object() {
+        for (id, text) in obj {
+            if let Some(item) = items.get(id.as_str()) {
+                let _ = item.set_text(text.as_str().unwrap_or(id));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_menu_labels(app: AppHandle, labels: Value) -> Result<(), String> {
+    use tauri::menu::MenuItemKind;
+    if let Some(menu) = app.menu() {
+        if let Some(obj) = labels.as_object() {
+            for (id, text) in obj {
+                if let Some(item) = menu.get(id) {
+                    match item {
+                        MenuItemKind::MenuItem(mi) => {
+                            let _ = mi.set_text(text.as_str().unwrap_or(id));
+                        }
+                        MenuItemKind::Submenu(sub) => {
+                            let _ = sub.set_text(text.as_str().unwrap_or(id));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_progress_bar(app: AppHandle, progress: f64) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        if progress < 0.0 {
+            let _ = window.set_progress_bar(ProgressBarState {
+                status: Some(tauri::window::ProgressBarStatus::None),
+                progress: None,
+            });
+        } else {
+            let _ = window.set_progress_bar(ProgressBarState {
+                status: Some(tauri::window::ProgressBarStatus::Normal),
+                progress: Some((progress * 100.0) as u64),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_dock_badge(app: AppHandle, label: String) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        if label.is_empty() {
+            let _ = window.set_badge_label(None::<String>);
+        } else {
+            let _ = window.set_badge_label(Some(label));
+        }
     }
     Ok(())
 }

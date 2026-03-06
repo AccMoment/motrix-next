@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': 'Потвърди затваряне',
   'confirm-exit-message': 'Сигурни ли сте, че искате да излезете? Активните изтегляния ще бъдат спрени.',
   'engine-not-ready': 'Двигателят се стартира, моля изчакайте...',
-  'new-version-available': 'Налична нова версия'
+  'new-version-available': 'Налична нова версия',
+  'tray-new-task': 'Нова задача',
+  'tray-resume-all': 'Подновяване на всички',
+  'tray-pause-all': 'Спиране на всички',
+  'menu-new-task': 'Нова задача',
+  'menu-open-torrent': 'Отваряне на Torrent файл...',
+  'menu-preferences': 'Настройки...',
+  'menu-release-notes': 'Бележки за версията',
+  'menu-report-issue': 'Докладване на проблем'
 }

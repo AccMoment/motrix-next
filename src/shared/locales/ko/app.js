@@ -36,5 +36,13 @@ export default {
   'confirm-exit-title': '종료 확인',
   'confirm-exit-message': '종료하시겠습니까? 진행 중인 다운로드가 일시 중지됩니다.',
   'engine-not-ready': '엔진 시작 중입니다. 잠시만 기다려 주세요...',
-  'new-version-available': '새 버전 사용 가능'
+  'new-version-available': '새 버전 사용 가능',
+  'tray-new-task': '새 작업',
+  'tray-resume-all': '모두 재개',
+  'tray-pause-all': '모두 일시정지',
+  'menu-new-task': '새 작업',
+  'menu-open-torrent': '토렌트 파일 열기...',
+  'menu-preferences': '설정...',
+  'menu-release-notes': '릴리스 노트',
+  'menu-report-issue': '문제 보고'
 }
