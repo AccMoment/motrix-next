@@ -124,8 +124,7 @@ watch(
   async (visible) => {
     if (!visible) return
     if (appStore.droppedTorrentPaths.length > 0) {
-      activeTab.value = ADD_TASK_TYPE.TORRENT
-      await loadTorrentFromPath(appStore.droppedTorrentPaths[0])
+      await loadDroppedFile(appStore.droppedTorrentPaths[0])
       return
     }
     if (activeTab.value === ADD_TASK_TYPE.URI && !form.value.uris) {
@@ -151,29 +150,39 @@ watch(
   () => appStore.droppedTorrentPaths,
   async (paths) => {
     if (paths.length > 0 && props.show) {
-      const filePath = paths[0]
-      const lower = filePath.toLowerCase()
-      if (lower.endsWith('.metalink') || lower.endsWith('.meta4')) {
-        // Metalink file: read as base64 for addMetalink API
-        try {
-          const bytes = await readFile(filePath)
-          const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
-          metalinkBase64.value = uint8ToBase64(uint8)
-          torrentName.value =
-            filePath.substring(Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1) ||
-            'unknown.metalink'
-          torrentLoaded.value = true
-        } catch (e) {
-          logger.error('AddTask.loadMetalink', e)
-        }
-      } else {
-        metalinkBase64.value = ''
-        await loadTorrentFromPath(filePath)
-      }
-      activeTab.value = ADD_TASK_TYPE.TORRENT
+      await loadDroppedFile(paths[0])
     }
   },
 )
+
+/**
+ * Loads a dropped file (torrent or metalink) by detecting its extension.
+ * Sets the appropriate base64 data and switches to the torrent tab.
+ */
+async function loadDroppedFile(filePath: string) {
+  const lower = filePath.toLowerCase()
+  activeTab.value = ADD_TASK_TYPE.TORRENT
+
+  if (lower.endsWith('.metalink') || lower.endsWith('.meta4')) {
+    // Metalink file: read as base64 for addMetalink API
+    try {
+      metalinkBase64.value = ''
+      torrentBase64.value = ''
+      const bytes = await readFile(filePath)
+      const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+      metalinkBase64.value = uint8ToBase64(uint8)
+      torrentName.value =
+        filePath.substring(Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1) || 'unknown.metalink'
+      torrentLoaded.value = true
+    } catch (e) {
+      logger.error('AddTask.loadMetalink', e)
+    }
+  } else {
+    // Torrent file
+    metalinkBase64.value = ''
+    await loadTorrentFromPath(filePath)
+  }
+}
 
 async function loadTorrentFromPath(filePath: string) {
   try {

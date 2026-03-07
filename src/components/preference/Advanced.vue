@@ -16,7 +16,7 @@ import {
   PROXY_SCOPE_OPTIONS,
 } from '@shared/constants'
 import { convertCommaToLine, convertLineToComma, generateRandomInt } from '@shared/utils'
-import { fetchBtTrackerFromSource, convertTrackerDataToLine } from '@shared/utils/tracker'
+import { convertTrackerDataToLine } from '@shared/utils/tracker'
 import userAgentMap from '@shared/ua'
 import {
   NForm,
@@ -231,7 +231,7 @@ async function handleSyncTracker() {
   }
   syncingTracker.value = true
   try {
-    const results = await fetchBtTrackerFromSource(form.value.trackerSource)
+    const results = await preferenceStore.fetchBtTracker(form.value.trackerSource)
     const text = convertTrackerDataToLine(results)
     if (text) {
       form.value.btTracker = text
@@ -390,9 +390,9 @@ onMounted(() => {
             max-tag-count="responsive"
           />
           <NButton :loading="syncingTracker" size="small" style="flex-shrink: 0" @click="handleSyncTracker">
-            <template #icon
-              ><NIcon><SyncOutline /></NIcon
-            ></template>
+            <template #icon>
+              <NIcon><SyncOutline /></NIcon>
+            </template>
             {{ t('preferences.bt-tracker-sync') }}
           </NButton>
         </NInputGroup>
@@ -433,9 +433,9 @@ onMounted(() => {
         <NInputGroup>
           <NInputNumber v-model:value="form.rpcListenPort" :min="1024" :max="65535" style="width: 160px" />
           <NButton style="padding: 0 10px" @click="onRpcPortDice">
-            <template #icon
-              ><NIcon :size="14"><DiceOutline /></NIcon
-            ></template>
+            <template #icon>
+              <NIcon :size="14"><DiceOutline /></NIcon>
+            </template>
           </NButton>
         </NInputGroup>
       </NFormItem>
@@ -450,9 +450,9 @@ onMounted(() => {
             :status="form.rpcSecret ? undefined : 'error'"
           />
           <NButton style="padding: 0 10px" @click="onRpcSecretDice">
-            <template #icon
-              ><NIcon :size="14"><DiceOutline /></NIcon
-            ></template>
+            <template #icon>
+              <NIcon :size="14"><DiceOutline /></NIcon>
+            </template>
           </NButton>
         </NInputGroup>
       </NFormItem>
@@ -465,9 +465,9 @@ onMounted(() => {
         <NInputGroup>
           <NInputNumber v-model:value="form.listenPort" :min="1024" :max="65535" style="width: 160px" />
           <NButton style="padding: 0 10px" @click="onBtPortDice">
-            <template #icon
-              ><NIcon :size="14"><DiceOutline /></NIcon
-            ></template>
+            <template #icon>
+              <NIcon :size="14"><DiceOutline /></NIcon>
+            </template>
           </NButton>
         </NInputGroup>
       </NFormItem>
@@ -475,9 +475,9 @@ onMounted(() => {
         <NInputGroup>
           <NInputNumber v-model:value="form.dhtListenPort" :min="1024" :max="65535" style="width: 160px" />
           <NButton style="padding: 0 10px" @click="onDhtPortDice">
-            <template #icon
-              ><NIcon :size="14"><DiceOutline /></NIcon
-            ></template>
+            <template #icon>
+              <NIcon :size="14"><DiceOutline /></NIcon>
+            </template>
           </NButton>
         </NInputGroup>
       </NFormItem>
@@ -536,9 +536,9 @@ onMounted(() => {
     </NForm>
     <div class="form-actions">
       <NSpace>
-        <NButton :class="{ 'save-btn-dirty': isDirty }" type="primary" @click="handleSave">{{
-          t('preferences.save')
-        }}</NButton>
+        <NButton :class="{ 'save-btn-dirty': isDirty }" type="primary" @click="handleSave">
+          {{ t('preferences.save') }}
+        </NButton>
         <NButton :class="{ 'discard-btn-dirty': isDirty }" @click="handleReset">{{ t('preferences.discard') }}</NButton>
       </NSpace>
     </div>

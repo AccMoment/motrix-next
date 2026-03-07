@@ -2,7 +2,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { EMPTY_STRING, TASK_STATUS } from '@shared/constants'
-import { checkTaskIsBT, getTaskUri, intersection } from '@shared/utils'
+import { checkTaskIsBT, getTaskUris, intersection } from '@shared/utils'
 import { logger } from '@shared/logger'
 import type {
   Aria2Task,
@@ -277,19 +277,20 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   /**
-   * Restarts a stopped/errored/completed task by extracting its URI,
+   * Restarts a stopped/errored/completed task by extracting its URI(s),
    * removing the old record, and re-submitting as a new download.
    * For BT tasks, rebuilds the magnet link with trackers.
+   * For multi-file HTTP/FTP tasks, collects all file URIs.
+   * Throws if no URIs can be recovered.
    */
   async function restartTask(task: Aria2Task) {
     const { status, gid, dir } = task
     const { ERROR, COMPLETE, REMOVED } = TASK_STATUS
     if (status !== ERROR && status !== COMPLETE && status !== REMOVED) return
 
-    const uri = getTaskUri(task, true) // include trackers for BT
-    if (!uri) {
-      logger.warn('TaskStore.restartTask', `No URI found for task ${gid}`)
-      return
+    const uris = getTaskUris(task, true) // include trackers for BT
+    if (uris.length === 0) {
+      throw new Error('Cannot restart: no download URIs found for this task')
     }
 
     // Remove the old record first
@@ -302,7 +303,7 @@ export const useTaskStore = defineStore('task', () => {
     // Re-submit with original directory
     const options: Record<string, string> = {}
     if (dir) options.dir = dir
-    await api.addUri({ uris: [uri], outs: [], options })
+    await api.addUri({ uris, outs: [], options })
     await fetchList()
     api.saveSession()
   }

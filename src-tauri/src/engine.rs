@@ -263,9 +263,14 @@ fn build_start_args(
     ];
 
     // Check keep-seeding flag (app-level logic, not aria2c option)
+    // Frontend sends String("true"/"false"), so handle both Bool and String
     let keep_seeding = config
         .get("keep-seeding")
-        .and_then(|v| v.as_bool())
+        .map(|v| match v {
+            serde_json::Value::Bool(b) => *b,
+            serde_json::Value::String(s) => s == "true",
+            _ => false,
+        })
         .unwrap_or(false);
 
     if let Some(obj) = config.as_object() {
