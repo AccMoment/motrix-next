@@ -25,7 +25,8 @@ pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Resul
 
     // Ensure the download directory exists
     if let Some(dir) = config.get("dir").and_then(|v| v.as_str()) {
-        let _ = std::fs::create_dir_all(dir);
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Failed to create download directory '{}': {}", dir, e))?;
     }
 
     // Kill any leftover aria2c process on the RPC port before starting
