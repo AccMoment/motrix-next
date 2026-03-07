@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Engine bị hỏng. Vui lòng cài lại :(',
   'engine-missing-message': 'Thiếu engine. Vui lòng cài lại :(',
   'system-error-title': 'Lỗi hệ thống',
-  'system-error-message': 'Khởi động thất bại: {{message}}',
+  'system-error-message': 'Khởi động thất bại: {message}',
   'hide': 'Ẩn Motrix Next',
   'hide-others': 'Ẩn các cửa sổ khác',
   'unhide': 'Hiện tất cả',

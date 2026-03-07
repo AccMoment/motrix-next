@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Mesin rusak. Silakan pasang ulang :(',
   'engine-missing-message': 'Mesin tidak ditemukan. Silakan pasang ulang :(',
   'system-error-title': 'Kesalahan sistem',
-  'system-error-message': 'Gagal memulai: {{message}}',
+  'system-error-message': 'Gagal memulai: {message}',
   'hide': 'Sembunyikan Motrix Next',
   'hide-others': 'Sembunyikan lainnya',
   'unhide': 'Tampilkan semua',

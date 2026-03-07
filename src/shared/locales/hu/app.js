@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'A motor sérült. Kérjük, telepítse újra :(',
   'engine-missing-message': 'A motor hiányzik. Kérjük, telepítse újra :(',
   'system-error-title': 'Rendszerhiba',
-  'system-error-message': 'Indítási hiba: {{message}}',
+  'system-error-message': 'Indítási hiba: {message}',
   'hide': 'Motrix Next elrejtése',
   'hide-others': 'Többi elrejtése',
   'unhide': 'Összes megjelenítése',

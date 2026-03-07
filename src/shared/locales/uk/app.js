@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Рушій пошкоджено. Перевстановіть :(',
   'engine-missing-message': 'Рушій відсутній. Перевстановіть :(',
   'system-error-title': 'Системна помилка',
-  'system-error-message': 'Помилка запуску: {{message}}',
+  'system-error-message': 'Помилка запуску: {message}',
   'hide': 'Сховати Motrix Next',
   'hide-others': 'Сховати інші',
   'unhide': 'Показати все',

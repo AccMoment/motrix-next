@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'エンジンが破損しています。再インストールしてください :(',
   'engine-missing-message': 'エンジンが見つかりません。再インストールしてください :(',
   'system-error-title': 'システムエラー',
-  'system-error-message': 'アプリケーションの起動に失敗しました：{{message}}',
+  'system-error-message': 'アプリケーションの起動に失敗しました：{message}',
   'hide': 'Motrix Next を隠す',
   'hide-others': '他を隠す',
   'unhide': 'すべて表示',

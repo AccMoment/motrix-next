@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Le moteur est endommagé, veuillez réinstaller :(',
   'engine-missing-message': 'Le moteur est manquant, veuillez réinstaller :(',
   'system-error-title': 'Erreur système',
-  'system-error-message': 'Échec du démarrage : {{message}}',
+  'system-error-message': 'Échec du démarrage : {message}',
   'hide': 'Masquer Motrix Next',
   'hide-others': 'Masquer les autres',
   'unhide': 'Tout afficher',

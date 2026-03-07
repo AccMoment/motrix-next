@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Motor hasarlı. Lütfen yeniden yükleyin :(',
   'engine-missing-message': 'Motor eksik. Lütfen yeniden yükleyin :(',
   'system-error-title': 'Sistem hatası',
-  'system-error-message': 'Başlatma başarısız: {{message}}',
+  'system-error-message': 'Başlatma başarısız: {message}',
   'hide': 'Motrix Next\'i gizle',
   'hide-others': 'Diğerlerini gizle',
   'unhide': 'Tümünü göster',

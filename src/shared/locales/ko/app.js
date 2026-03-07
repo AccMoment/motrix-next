@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': '엔진이 손상되었습니다. 재설치해 주세요 :(',
   'engine-missing-message': '엔진을 찾을 수 없습니다. 재설치해 주세요 :(',
   'system-error-title': '시스템 오류',
-  'system-error-message': '앱 시작 실패: {{message}}',
+  'system-error-message': '앱 시작 실패: {message}',
   'hide': 'Motrix Next 숨기기',
   'hide-others': '다른 앱 숨기기',
   'unhide': '모두 표시',

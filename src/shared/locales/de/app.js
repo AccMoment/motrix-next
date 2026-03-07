@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Die Engine ist beschädigt. Bitte neu installieren :(',
   'engine-missing-message': 'Die Engine fehlt. Bitte neu installieren :(',
   'system-error-title': 'Systemfehler',
-  'system-error-message': 'Start fehlgeschlagen: {{message}}',
+  'system-error-message': 'Start fehlgeschlagen: {message}',
   'hide': 'Motrix Next ausblenden',
   'hide-others': 'Andere ausblenden',
   'unhide': 'Alle einblenden',

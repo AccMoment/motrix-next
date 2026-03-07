@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'المحرك تالف. يرجى إعادة التثبيت :(',
   'engine-missing-message': 'المحرك مفقود. يرجى إعادة التثبيت :(',
   'system-error-title': 'خطأ في النظام',
-  'system-error-message': 'فشل في البدء: {{message}}',
+  'system-error-message': 'فشل في البدء: {message}',
   'hide': 'إخفاء Motrix Next',
   'hide-others': 'إخفاء الآخرين',
   'unhide': 'إظهار الكل',

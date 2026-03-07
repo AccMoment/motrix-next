@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Двигателят е повреден. Моля, преинсталирайте :(',
   'engine-missing-message': 'Двигателят липсва. Моля, преинсталирайте :(',
   'system-error-title': 'Системна грешка',
-  'system-error-message': 'Неуспешно стартиране: {{message}}',
+  'system-error-message': 'Неуспешно стартиране: {message}',
   'hide': 'Скрий Motrix Next',
   'hide-others': 'Скрий останалите',
   'unhide': 'Покажи всички',

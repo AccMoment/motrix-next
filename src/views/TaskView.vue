@@ -6,6 +6,7 @@ import { useAppStore } from '@/stores/app'
 import { usePreferenceStore } from '@/stores/preference'
 import { getTaskUri, getTaskName } from '@shared/utils'
 import { remove, stat } from '@tauri-apps/plugin-fs'
+import { join } from '@tauri-apps/api/path'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import aria2Api, { isEngineReady } from '@/api/aria2'
 import { useDialog, NCheckbox } from 'naive-ui'
@@ -86,7 +87,6 @@ async function deleteTaskFiles(task: Record<string, unknown>) {
   if (dir) {
     const taskName = getTaskName(task as never, { defaultName: '', maxLen: -1 })
     if (taskName) {
-      const { join } = await import('@tauri-apps/api/path')
       const taskDir = await join(dir, taskName)
       try { await remove(taskDir, { recursive: true }) } catch {}
     }
@@ -123,7 +123,7 @@ function handleDeleteTask(task: Record<string, unknown>) {
       d.closable = false
       d.maskClosable = false
       // Yield to browser so the loading spinner renders before heavy IPC work
-      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 50))
       try {
         await taskStore.removeTask(task as never)
         if (deleteFiles.value) {

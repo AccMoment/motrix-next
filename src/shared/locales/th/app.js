@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'เอนจินเสียหาย กรุณาติดตั้งใหม่ :(',
   'engine-missing-message': 'ไม่พบเอนจิน กรุณาติดตั้งใหม่ :(',
   'system-error-title': 'ข้อผิดพลาดของระบบ',
-  'system-error-message': 'เริ่มต้นล้มเหลว: {{message}}',
+  'system-error-message': 'เริ่มต้นล้มเหลว: {message}',
   'hide': 'ซ่อน Motrix Next',
   'hide-others': 'ซ่อนอื่นๆ',
   'unhide': 'แสดงทั้งหมด',

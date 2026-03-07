@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'El motor està malmès. Si us plau, reinstal·leu :(',
   'engine-missing-message': 'Falta el motor. Si us plau, reinstal·leu :(',
   'system-error-title': 'Error del sistema',
-  'system-error-message': 'Error en iniciar: {{message}}',
+  'system-error-message': 'Error en iniciar: {message}',
   'hide': 'Amagar Motrix Next',
   'hide-others': 'Amagar altres',
   'unhide': 'Mostrar-ho tot',

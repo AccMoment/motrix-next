@@ -7,6 +7,7 @@ import { usePreferenceStore } from '@/stores/preference'
 import { ADD_TASK_TYPE } from '@shared/constants'
 import { isEngineReady } from '@/api/aria2'
 import { remove } from '@tauri-apps/plugin-fs'
+import { join } from '@tauri-apps/api/path'
 import { getTaskName } from '@shared/utils'
 import { NButton, NIcon, NTooltip, NCheckbox, useDialog } from 'naive-ui'
 import { useAppMessage } from '@/composables/useAppMessage'
@@ -46,7 +47,7 @@ function onDeleteAll() {
   const d = dialog.warning({
     title: t('task.delete-task'),
     content: () => h('div', {}, [
-      h('p', { style: 'margin: 0 0 12px;' }, `${t('task.batch-delete-task-confirm').replace('{{count}}', String(gids.length))}`),
+      h('p', { style: 'margin: 0 0 12px;' }, t('task.batch-delete-task-confirm', { count: gids.length })),
       h(NCheckbox, {
         checked: deleteFiles.value,
         'onUpdate:checked': (v: boolean) => { deleteFiles.value = v },
@@ -60,7 +61,7 @@ function onDeleteAll() {
       d.closable = false
       d.maskClosable = false
       // Yield to browser so the loading spinner renders before heavy IPC work
-      await new Promise(r => setTimeout(r, 0))
+      await new Promise(r => setTimeout(r, 50))
       if (deleteFiles.value) {
         const tasks = taskStore.taskList.filter(t => gids.includes(t.gid))
         for (const task of tasks) {
@@ -83,7 +84,6 @@ function onDeleteAll() {
           if (dir) {
             const name = getTaskName(task as never, { defaultName: '', maxLen: -1 })
             if (name) {
-              const { join } = await import('@tauri-apps/api/path')
               const taskDir = await join(dir, name)
               try { await remove(taskDir, { recursive: true }) } catch {}
             }

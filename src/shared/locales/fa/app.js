@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'موتور آسیب دیده. لطفاً دوباره نصب کنید :(',
   'engine-missing-message': 'موتور موجود نیست. لطفاً دوباره نصب کنید :(',
   'system-error-title': 'خطای سیستم',
-  'system-error-message': 'خطا در شروع: {{message}}',
+  'system-error-message': 'خطا در شروع: {message}',
   'hide': 'مخفی کردن Motrix Next',
   'hide-others': 'مخفی کردن دیگران',
   'unhide': 'نمایش همه',

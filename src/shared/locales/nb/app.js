@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Motoren er skadet. Vennligst installer på nytt :(',
   'engine-missing-message': 'Motoren mangler. Vennligst installer på nytt :(',
   'system-error-title': 'Systemfeil',
-  'system-error-message': 'Kunne ikke starte: {{message}}',
+  'system-error-message': 'Kunne ikke starte: {message}',
   'hide': 'Skjul Motrix Next',
   'hide-others': 'Skjul andre',
   'unhide': 'Vis alle',

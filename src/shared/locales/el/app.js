@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Η μηχανή είναι κατεστραμμένη. Παρακαλώ επανεγκαταστήστε :(',
   'engine-missing-message': 'Η μηχανή λείπει. Παρακαλώ επανεγκαταστήστε :(',
   'system-error-title': 'Σφάλμα συστήματος',
-  'system-error-message': 'Αποτυχία εκκίνησης: {{message}}',
+  'system-error-message': 'Αποτυχία εκκίνησης: {message}',
   'hide': 'Απόκρυψη Motrix Next',
   'hide-others': 'Απόκρυψη άλλων',
   'unhide': 'Εμφάνιση όλων',

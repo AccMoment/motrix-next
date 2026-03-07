@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'O mecanismo está corrompido. Reinstale :(',
   'engine-missing-message': 'O mecanismo está ausente. Reinstale :(',
   'system-error-title': 'Erro do sistema',
-  'system-error-message': 'Falha ao iniciar: {{message}}',
+  'system-error-message': 'Falha ao iniciar: {message}',
   'hide': 'Ocultar Motrix Next',
   'hide-others': 'Ocultar outros',
   'unhide': 'Mostrar tudo',

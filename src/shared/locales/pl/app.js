@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Silnik jest uszkodzony. Zainstaluj ponownie :(',
   'engine-missing-message': 'Brak silnika. Zainstaluj ponownie :(',
   'system-error-title': 'Błąd systemowy',
-  'system-error-message': 'Nie udało się uruchomić: {{message}}',
+  'system-error-message': 'Nie udało się uruchomić: {message}',
   'hide': 'Ukryj Motrix Next',
   'hide-others': 'Ukryj inne',
   'unhide': 'Pokaż wszystko',

@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Движок повреждён. Переустановите :(',
   'engine-missing-message': 'Движок отсутствует. Переустановите :(',
   'system-error-title': 'Системная ошибка',
-  'system-error-message': 'Ошибка запуска: {{message}}',
+  'system-error-message': 'Ошибка запуска: {message}',
   'hide': 'Скрыть Motrix Next',
   'hide-others': 'Скрыть остальные',
   'unhide': 'Показать все',

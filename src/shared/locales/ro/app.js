@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'Motorul este deteriorat. Reinstalați :(',
   'engine-missing-message': 'Motorul lipsește. Reinstalați :(',
   'system-error-title': 'Eroare de sistem',
-  'system-error-message': 'Pornire eșuată: {{message}}',
+  'system-error-message': 'Pornire eșuată: {message}',
   'hide': 'Ascunde Motrix Next',
   'hide-others': 'Ascunde celelalte',
   'unhide': 'Afișează tot',

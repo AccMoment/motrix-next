@@ -14,7 +14,7 @@ export default {
   'engine-damaged-message': 'De engine is beschadigd. Installeer opnieuw :(',
   'engine-missing-message': 'De engine ontbreekt. Installeer opnieuw :(',
   'system-error-title': 'Systeemfout',
-  'system-error-message': 'Starten mislukt: {{message}}',
+  'system-error-message': 'Starten mislukt: {message}',
   'hide': 'Motrix Next verbergen',
   'hide-others': 'Andere verbergen',
   'unhide': 'Alles tonen',
