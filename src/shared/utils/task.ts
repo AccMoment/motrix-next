@@ -75,13 +75,13 @@ export const buildMagnetLink = (task: Aria2Task, withTracker = false, btTracker:
 
   const params = [`magnet:?xt=urn:btih:${infoHash}`]
   if (info && info.name) {
-    params.push(`dn=${encodeURI(info.name)}`)
+    params.push(`dn=${encodeURIComponent(info.name)}`)
   }
 
   if (withTracker && bittorrent?.announceList) {
     const trackers = difference(bittorrent.announceList, btTracker)
     trackers.forEach((tracker) => {
-      params.push(`tr=${encodeURI(tracker)}`)
+      params.push(`tr=${encodeURIComponent(tracker)}`)
     })
   }
 

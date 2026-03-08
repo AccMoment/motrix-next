@@ -78,8 +78,6 @@ export function usePreferenceForm<T extends Record<string, unknown>>(options: Us
     // so afterSave hooks can compare old vs new values.
     const prevConfig = { ...preferenceStore.config }
 
-    savedSnapshot.value = JSON.parse(JSON.stringify(form.value)) as T
-
     const storeData: Partial<AppConfig> = options.transformForStore
       ? options.transformForStore(form.value as T)
       : { ...(form.value as T) }
@@ -90,6 +88,11 @@ export function usePreferenceForm<T extends Record<string, unknown>>(options: Us
     if (Object.keys(systemConfig).length > 0) {
       await invoke('save_system_config', { config: systemConfig })
     }
+
+    // Only mark as saved AFTER both stores persist successfully.
+    // Moving this earlier would clear the dirty flag prematurely,
+    // causing route-leave guards to skip if an async save fails.
+    savedSnapshot.value = JSON.parse(JSON.stringify(form.value)) as T
 
     message.success(t('preferences.save-success-message'))
 

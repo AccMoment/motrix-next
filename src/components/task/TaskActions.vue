@@ -69,13 +69,17 @@ function onDeleteAll() {
       d.maskClosable = false
       // Yield to browser so the loading spinner renders before heavy IPC work
       await new Promise((r) => setTimeout(r, 50))
-      if (deleteFiles.value) {
-        const tasks = taskStore.taskList.filter((t) => gids.includes(t.gid))
-        for (const task of tasks) {
-          await deleteTaskFiles(task)
-        }
-      }
+      // Capture task references BEFORE removal — the store list mutates after
+      // batchRemoveTask, so we'd lose the dir/path info needed for file deletion.
+      const tasksToDelete = deleteFiles.value ? taskStore.taskList.filter((t) => gids.includes(t.gid)) : []
+      // Remove task records FIRST, then delete files.
+      // This matches the safer order used in single-task delete (TaskView.vue).
+      // If file deletion fails, tasks are already cleaned up from aria2;
+      // the reverse order would leave orphaned tasks with missing files.
       await taskStore.batchRemoveTask(gids)
+      for (const task of tasksToDelete) {
+        await deleteTaskFiles(task)
+      }
       message.success(t('task.batch-delete-task-success'))
     },
   })
@@ -144,9 +148,9 @@ function purgeRecord() {
     <NTooltip>
       <template #trigger>
         <NButton type="primary" circle size="small" @click="showAddTask">
-          <template #icon
-            ><NIcon><AddOutline /></NIcon
-          ></template>
+          <template #icon>
+            <NIcon><AddOutline /></NIcon>
+          </template>
         </NButton>
       </template>
       {{ t('task.new-task') || 'New Task' }}
@@ -164,9 +168,9 @@ function purgeRecord() {
     <NTooltip v-if="currentList !== 'stopped'">
       <template #trigger>
         <NButton quaternary circle size="small" @click="resumeAll">
-          <template #icon
-            ><NIcon><PlayOutline /></NIcon
-          ></template>
+          <template #icon>
+            <NIcon><PlayOutline /></NIcon>
+          </template>
         </NButton>
       </template>
       {{ t('task.resume-all-task') || 'Resume All' }}
@@ -174,9 +178,9 @@ function purgeRecord() {
     <NTooltip v-if="currentList !== 'stopped'">
       <template #trigger>
         <NButton quaternary circle size="small" @click="pauseAll">
-          <template #icon
-            ><NIcon><PauseOutline /></NIcon
-          ></template>
+          <template #icon>
+            <NIcon><PauseOutline /></NIcon>
+          </template>
         </NButton>
       </template>
       {{ t('task.pause-all-task') || 'Pause All' }}
@@ -184,9 +188,9 @@ function purgeRecord() {
     <NTooltip v-if="currentList !== 'stopped'">
       <template #trigger>
         <NButton quaternary circle size="small" :disabled="allGids.length === 0" @click="onDeleteAll">
-          <template #icon
-            ><NIcon><CloseOutline /></NIcon
-          ></template>
+          <template #icon>
+            <NIcon><CloseOutline /></NIcon>
+          </template>
         </NButton>
       </template>
       {{ t('task.delete-all-task') }}
@@ -194,9 +198,9 @@ function purgeRecord() {
     <NTooltip v-if="currentList === 'stopped'">
       <template #trigger>
         <NButton quaternary circle size="small" @click="purgeRecord">
-          <template #icon
-            ><NIcon><TrashOutline /></NIcon
-          ></template>
+          <template #icon>
+            <NIcon><TrashOutline /></NIcon>
+          </template>
         </NButton>
       </template>
       {{ t('task.purge-record') || 'Purge Records' }}

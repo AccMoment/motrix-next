@@ -16,7 +16,11 @@ export const getFileSelection = (files: Aria2File[] = []): string => {
   if (files.length === 0 || selectedFiles.length === 0) return NONE_SELECTED_FILES
   if (files.length === selectedFiles.length) return SELECTED_ALL_FILES
   const indexArr: number[] = []
-  files.forEach((_, index) => indexArr.push(index))
+  files.forEach((file, index) => {
+    if (file.selected === 'true') {
+      indexArr.push(index + 1) // aria2 uses 1-based file indices
+    }
+  })
   return indexArr.join(',')
 }
 

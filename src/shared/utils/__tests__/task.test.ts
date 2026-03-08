@@ -233,8 +233,8 @@ describe('buildMagnetLink', () => {
       },
     })
     const result = buildMagnetLink(task, true)
-    expect(result).toContain('tr=http://tracker1.com')
-    expect(result).toContain('tr=http://tracker2.com')
+    expect(result).toContain('tr=http%3A%2F%2Ftracker1.com')
+    expect(result).toContain('tr=http%3A%2F%2Ftracker2.com')
   })
 
   it('excludes trackers already in btTracker list', () => {
@@ -246,8 +246,8 @@ describe('buildMagnetLink', () => {
       },
     })
     const result = buildMagnetLink(task, true, ['http://tracker1.com'])
-    expect(result).not.toContain('tr=http://tracker1.com')
-    expect(result).toContain('tr=http://tracker2.com')
+    expect(result).not.toContain('tr=http%3A%2F%2Ftracker1.com')
+    expect(result).toContain('tr=http%3A%2F%2Ftracker2.com')
   })
 
   it('does not include trackers when withTracker is false', () => {

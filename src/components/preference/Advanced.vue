@@ -8,7 +8,7 @@ import { usePreferenceForm } from '@/composables/usePreferenceForm'
 import { useTaskStore } from '@/stores/task'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { appDataDir, resolveResource } from '@tauri-apps/api/path'
-import { ENGINE_RPC_PORT, LOG_LEVELS, PROXY_SCOPE_OPTIONS } from '@shared/constants'
+import { ENGINE_RPC_PORT, LOG_LEVELS, PROXY_SCOPES, PROXY_SCOPE_OPTIONS } from '@shared/constants'
 import { convertCommaToLine, convertLineToComma, generateRandomInt } from '@shared/utils'
 import { convertTrackerDataToLine } from '@shared/utils/tracker'
 import userAgentMap from '@shared/ua'
@@ -156,7 +156,8 @@ function generateSecret(): string {
 const { form, isDirty, handleSave, handleReset, resetSnapshot } = usePreferenceForm({
   buildForm,
   buildSystemConfig: (f) => {
-    const proxyForDownloads = f.proxy.enable && Array.isArray(f.proxy.scope) && f.proxy.scope.includes('downloads')
+    const proxyForDownloads =
+      f.proxy.enable && Array.isArray(f.proxy.scope) && f.proxy.scope.includes(PROXY_SCOPES.DOWNLOAD)
     return {
       'rpc-listen-port': String(f.rpcListenPort),
       'rpc-secret': f.rpcSecret,

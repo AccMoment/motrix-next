@@ -154,11 +154,8 @@ describe('getFileSelection', () => {
       createMockFile({ index: '3', selected: 'true' }),
     ]
     const result = getFileSelection(files)
-    // Current implementation returns ALL indices (0,1,2) — this is a bug.
-    // The correct behavior should be returning only selected file indices.
-    // This test documents the current (buggy) behavior.
-    expect(result).toContain(',')
-    expect(typeof result).toBe('string')
+    // aria2 uses 1-based indices; only selected files should be included.
+    expect(result).toBe('1,3')
   })
 })
 
