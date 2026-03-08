@@ -1,0 +1,87 @@
+<script setup lang="ts">
+/** @fileoverview Advanced task options panel (UA, auth, referer, cookie, proxy, navigate). */
+import { useI18n } from 'vue-i18n'
+import { NFormItem, NInput, NCheckbox, NGrid, NGridItem, NCollapseTransition } from 'naive-ui'
+
+const { t } = useI18n()
+
+defineProps<{
+  show: boolean
+  userAgent: string
+  authorization: string
+  referer: string
+  cookie: string
+  allProxy: string
+  newTaskShowDownloading: boolean
+}>()
+
+defineEmits<{
+  'update:show': [value: boolean]
+  'update:userAgent': [value: string]
+  'update:authorization': [value: string]
+  'update:referer': [value: string]
+  'update:cookie': [value: string]
+  'update:allProxy': [value: string]
+  'update:newTaskShowDownloading': [value: boolean]
+}>()
+</script>
+
+<template>
+  <NFormItem :show-label="false">
+    <NCheckbox :checked="show" @update:checked="$emit('update:show', $event)">
+      {{ t('task.show-advanced-options') }}
+    </NCheckbox>
+  </NFormItem>
+  <NCollapseTransition :show="show">
+    <div>
+      <NFormItem :label="t('task.task-user-agent') + ':'">
+        <NInput
+          :value="userAgent"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 3 }"
+          @update:value="$emit('update:userAgent', $event)"
+        />
+      </NFormItem>
+      <NFormItem :label="t('task.task-authorization') + ':'">
+        <NInput
+          :value="authorization"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 3 }"
+          @update:value="$emit('update:authorization', $event)"
+        />
+      </NFormItem>
+      <NFormItem :label="t('task.task-referer') + ':'">
+        <NInput
+          :value="referer"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 3 }"
+          @update:value="$emit('update:referer', $event)"
+        />
+      </NFormItem>
+      <NFormItem :label="t('task.task-cookie') + ':'">
+        <NInput
+          :value="cookie"
+          type="textarea"
+          :autosize="{ minRows: 2, maxRows: 3 }"
+          @update:value="$emit('update:cookie', $event)"
+        />
+      </NFormItem>
+      <NGrid :cols="24" :x-gap="12">
+        <NGridItem :span="16">
+          <NFormItem :label="t('task.task-proxy') + ':'">
+            <NInput
+              :value="allProxy"
+              placeholder="[http://][USER:PASSWORD@]HOST[:PORT]"
+              @update:value="$emit('update:allProxy', $event)"
+            />
+          </NFormItem>
+        </NGridItem>
+      </NGrid>
+      <NFormItem :show-label="false">
+        <NCheckbox :checked="newTaskShowDownloading" @update:checked="$emit('update:newTaskShowDownloading', $event)">
+          {{ t('task.navigate-to-downloading') }}
+        </NCheckbox>
+      </NFormItem>
+    </div>
+  </NCollapseTransition>
+</template>

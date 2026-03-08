@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/** @fileoverview Detailed task view with file list, peers, and BT info. */
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { TASK_STATUS } from '@shared/constants'
@@ -15,13 +16,13 @@ import {
   InformationCircleOutline, PulseOutline, DocumentOutline,
   PeopleOutline, ServerOutline
 } from '@vicons/ionicons5'
-import TaskItemActions from './TaskItemActions.vue'
 import TaskGraphic from './TaskGraphic.vue'
+import type { Aria2Task, Aria2File, Aria2Peer } from '@shared/types'
 
 const props = defineProps<{
   show: boolean
-  task: Record<string, unknown> | null
-  files: unknown[]
+  task: Aria2Task | null
+  files: Aria2File[]
 }>()
 const emit = defineEmits<{ close: [] }>()
 
@@ -51,17 +52,17 @@ function switchTab(key: string) {
   activeTab.value = key
 }
 
-const isBT = computed(() => props.task ? checkTaskIsBT(props.task as never) : false)
+const isBT = computed(() => props.task ? checkTaskIsBT(props.task) : false)
 
 const prevTaskGid = ref('')
-watch(() => props.task?.gid as string | undefined, (gid) => {
+watch(() => props.task?.gid, (gid) => {
   if (gid && gid !== prevTaskGid.value) {
     activeTab.value = 'general'
     prevTaskGid.value = gid
   }
 })
-const isSeeder = computed(() => props.task ? checkTaskIsSeeder(props.task as never) : false)
-const taskStatusKey = computed(() => isSeeder.value ? TASK_STATUS.SEEDING : (props.task?.status as string))
+const isSeeder = computed(() => props.task ? checkTaskIsSeeder(props.task) : false)
+const taskStatusKey = computed(() => isSeeder.value ? TASK_STATUS.SEEDING : (props.task?.status))
 const taskStatus = computed(() => {
   const key = taskStatusKey.value
   const translated = t(`task.status-${key}`)
@@ -69,10 +70,10 @@ const taskStatus = computed(() => {
 })
 const isActive = computed(() => props.task?.status === TASK_STATUS.ACTIVE)
 const taskFullName = computed(() =>
-  props.task ? getTaskName(props.task as never, { defaultName: 'Unknown', maxLen: -1 }) : ''
+  props.task ? getTaskName(props.task, { defaultName: 'Unknown', maxLen: -1 }) : ''
 )
 const percent = computed(() =>
-  props.task ? calcProgress(props.task.totalLength as number, props.task.completedLength as number) : 0
+  props.task ? calcProgress(props.task.totalLength, props.task.completedLength) : 0
 )
 
 const remaining = computed(() => {
@@ -104,7 +105,7 @@ const ratio = computed(() => {
 
 const btInfo = computed(() => {
   if (!isBT.value || !props.task) return null
-  return props.task.bittorrent as Record<string, unknown> | undefined
+  return props.task.bittorrent
 })
 
 const statusTagType = computed(() => {
@@ -117,17 +118,16 @@ const statusTagType = computed(() => {
 })
 
 const fileList = computed(() =>
-  (props.files || []).map((item: unknown) => {
-    const f = item as Record<string, unknown>
-    const name = getFileName(f.path as string)
+  (props.files || []).map((item: Aria2File) => {
+    const name = getFileName(item.path)
     return {
-      idx: Number(f.index),
+      idx: Number(item.index),
       name,
       extension: '.' + getFileExtension(name),
-      length: Number(f.length),
-      completedLength: Number(f.completedLength),
-      percent: calcProgress(f.length as number, f.completedLength as number, 1),
-      selected: f.selected === 'true',
+      length: Number(item.length),
+      completedLength: Number(item.completedLength),
+      percent: calcProgress(item.length, item.completedLength, 1),
+      selected: item.selected === 'true',
     }
   })
 )
@@ -137,19 +137,19 @@ const fileColumns = computed(() => [
   { title: t('task.file-name') || 'Name', key: 'name', ellipsis: { tooltip: true } },
   { title: t('task.file-extension') || 'Ext', key: 'extension', width: 70 },
   { title: '%', key: 'percent', width: 60, align: 'right' as const },
-  { title: '✓', key: 'completedLength', width: 90, align: 'right' as const, render: (row: Record<string, unknown>) => bytesToSize(String(row.completedLength)) },
-  { title: t('task.file-size') || 'Size', key: 'length', width: 90, align: 'right' as const, render: (row: Record<string, unknown>) => bytesToSize(String(row.length)) },
+  { title: '✓', key: 'completedLength', width: 90, align: 'right' as const, render: (row: { completedLength: number }) => bytesToSize(String(row.completedLength)) },
+  { title: t('task.file-size') || 'Size', key: 'length', width: 90, align: 'right' as const, render: (row: { length: number }) => bytesToSize(String(row.length)) },
 ])
 
 const peers = computed(() => {
   if (!props.task || !isBT.value) return []
-  const p = props.task.peers as Record<string, unknown>[] | undefined
-  return (p || []).map((peer) => ({
+  const p = props.task.peers
+  return (p || []).map((peer: Aria2Peer) => ({
     host: `${peer.ip}:${peer.port}`,
-    client: peerIdParser(peer.peerId as string),
-    percent: peer.bitfield ? bitfieldToPercent(peer.bitfield as string) + '%' : '-',
-    uploadSpeed: bytesToSize(String(peer.uploadSpeed)) + '/s',
-    downloadSpeed: bytesToSize(String(peer.downloadSpeed)) + '/s',
+    client: peerIdParser(peer.peerId),
+    percent: peer.bitfield ? bitfieldToPercent(peer.bitfield) + '%' : '-',
+    uploadSpeed: bytesToSize(peer.uploadSpeed) + '/s',
+    downloadSpeed: bytesToSize(peer.downloadSpeed) + '/s',
   }))
 })
 
@@ -163,9 +163,9 @@ const peerColumns = [
 
 const announceList = computed(() => {
   if (!isBT.value || !btInfo.value) return ''
-  const list = btInfo.value.announceList as string[][]
+  const list = btInfo.value.announceList
   if (!list) return ''
-  return list.map((group) => (Array.isArray(group) ? group[0] : group)).join('\n')
+  return list.join('\n')
 })
 
 function handleClose() {
@@ -219,16 +219,16 @@ function handleClose() {
                   <NDescriptionsItem :label="t('task.task-piece-length') || 'Piece Size'">{{ bytesToSize(String(task.pieceLength)) }}</NDescriptionsItem>
                   <NDescriptionsItem :label="t('task.task-num-pieces') || 'Pieces'">{{ task.numPieces }}</NDescriptionsItem>
                   <NDescriptionsItem
-                    v-if="(btInfo as Record<string, unknown>)?.creationDate"
+                    v-if="btInfo?.creationDate"
                     :label="t('task.task-bittorrent-creation-date') || 'Created'"
                   >
-                    {{ localeDateTimeFormat(Number((btInfo as Record<string, unknown>).creationDate), 'en') }}
+                    {{ localeDateTimeFormat(Number(btInfo.creationDate), 'en') }}
                   </NDescriptionsItem>
                   <NDescriptionsItem
-                    v-if="(btInfo as Record<string, unknown>)?.comment"
+                    v-if="btInfo?.comment"
                     :label="t('task.task-bittorrent-comment') || 'Comment'"
                   >
-                    {{ (btInfo as Record<string, unknown>).comment }}
+                    {{ btInfo.comment }}
                   </NDescriptionsItem>
                 </NDescriptions>
               </template>
@@ -237,7 +237,7 @@ function handleClose() {
 
           <div v-else-if="activeTab === 'activity'" key="activity" class="tab-content">
             <template v-if="task">
-              <TaskGraphic v-if="task.bitfield" :bitfield="task.bitfield as string" />
+              <TaskGraphic v-if="task.bitfield" :bitfield="task.bitfield" />
               <NDescriptions :column="1" label-placement="left" bordered size="small">
                 <NDescriptionsItem :label="t('task.task-progress-info') || 'Progress'">
                   <div class="progress-row">
@@ -246,13 +246,13 @@ function handleClose() {
                   </div>
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-file-size') || 'Size'">
-                  {{ bytesToSize(task.completedLength as string, 2) }}
-                  <span v-if="Number(task.totalLength) > 0"> / {{ bytesToSize(task.totalLength as string, 2) }}</span>
+                  {{ bytesToSize(task.completedLength, 2) }}
+                  <span v-if="Number(task.totalLength) > 0"> / {{ bytesToSize(task.totalLength, 2) }}</span>
                   <span v-if="remainingText" class="remaining-text">{{ remainingText }}</span>
                 </NDescriptionsItem>
-                <NDescriptionsItem :label="t('task.task-download-speed') || 'DL Speed'">{{ bytesToSize(task.downloadSpeed as string) }}/s</NDescriptionsItem>
-                <NDescriptionsItem v-if="isBT" :label="t('task.task-upload-speed') || 'UL Speed'">{{ bytesToSize(task.uploadSpeed as string) }}/s</NDescriptionsItem>
-                <NDescriptionsItem v-if="isBT" :label="t('task.task-upload-length') || 'Uploaded'">{{ bytesToSize(task.uploadLength as string) }}</NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-download-speed') || 'DL Speed'">{{ bytesToSize(task.downloadSpeed) }}/s</NDescriptionsItem>
+                <NDescriptionsItem v-if="isBT" :label="t('task.task-upload-speed') || 'UL Speed'">{{ bytesToSize(task.uploadSpeed) }}/s</NDescriptionsItem>
+                <NDescriptionsItem v-if="isBT" :label="t('task.task-upload-length') || 'Uploaded'">{{ bytesToSize(task.uploadLength) }}</NDescriptionsItem>
                 <NDescriptionsItem v-if="isBT" :label="t('task.task-ratio') || 'Ratio'">{{ ratio }}</NDescriptionsItem>
                 <NDescriptionsItem v-if="isBT" :label="t('task.task-num-seeders') || 'Seeders'">{{ task.numSeeders }}</NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-connections') || 'Connections'">{{ task.connections }}</NDescriptionsItem>
@@ -264,7 +264,7 @@ function handleClose() {
             <NDataTable
               :columns="fileColumns"
               :data="fileList"
-              :row-key="(row: Record<string, unknown>) => row.idx as number"
+              :row-key="(row) => row.idx"
               size="small"
               :bordered="true"
               :max-height="400"
@@ -277,7 +277,7 @@ function handleClose() {
             <NDataTable
               :columns="peerColumns"
               :data="peers"
-              :row-key="(row: Record<string, unknown>) => row.host as string"
+              :row-key="(row) => row.host"
               size="small"
               :bordered="true"
               :max-height="400"
@@ -296,9 +296,6 @@ function handleClose() {
           </div>
         </Transition>
       </div>
-
-
-
     </NDrawerContent>
   </NDrawer>
 </template>

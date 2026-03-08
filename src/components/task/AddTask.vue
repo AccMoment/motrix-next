@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/** @fileoverview Add task dialog: URI, torrent, and metalink input with options. */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -12,15 +13,32 @@ import { buildOuts } from '@shared/utils/rename'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { downloadDir } from '@tauri-apps/api/path'
 import { readFile } from '@tauri-apps/plugin-fs'
+import { logger } from '@shared/logger'
+import { parseTorrentBuffer, uint8ToBase64 } from '@/composables/useTorrentParser'
 import bencode from 'bencode'
 import {
-  NModal, NCard, NTabs, NTabPane, NForm, NFormItem, NInput, NInputNumber,
-  NButton, NCheckbox, NSpace, NGrid, NGridItem, NIcon, NText, NInputGroup,
-  NCollapseTransition, NTooltip, NDataTable,
+  NModal,
+  NCard,
+  NTabs,
+  NTabPane,
+  NForm,
+  NFormItem,
+  NInput,
+  NInputNumber,
+  NButton,
+  NSpace,
+  NGrid,
+  NGridItem,
+  NIcon,
+  NInputGroup,
+  NDataTable,
 } from 'naive-ui'
 import { useAppMessage } from '@/composables/useAppMessage'
 import type { DataTableColumns } from 'naive-ui'
-import { CloudUploadOutline, FolderOpenOutline, TrashOutline } from '@vicons/ionicons5'
+import type { Aria2EngineOptions } from '@shared/types'
+import { FolderOpenOutline } from '@vicons/ionicons5'
+import TorrentUpload from './addtask/TorrentUpload.vue'
+import AdvancedOptions from './addtask/AdvancedOptions.vue'
 
 const props = defineProps<{ type: string; show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -35,7 +53,7 @@ const message = useAppMessage()
 const activeTab = ref(props.type || ADD_TASK_TYPE.URI)
 const slideDirection = ref<'left' | 'right'>('left')
 const showAdvanced = ref(false)
-const config = (preferenceStore.config || {}) as Record<string, unknown>
+const config = preferenceStore.config
 
 const torrentName = ref('')
 const torrentBase64 = ref('')
@@ -43,13 +61,14 @@ const torrentLoaded = ref(false)
 const torrentInfoHash = ref('')
 const torrentFiles = ref<{ idx: number; path: string; length: number }[]>([])
 const selectedFileIndices = ref<number[]>([])
+const metalinkBase64 = ref('')
 const submitting = ref(false)
 
 const form = ref({
   uris: '',
   out: '',
-  dir: (config.dir as string) || '',
-  split: (config.split as number) || 16,
+  dir: config.dir || '',
+  split: config.split || 16,
   userAgent: '',
   authorization: '',
   referer: '',
@@ -58,8 +77,8 @@ const form = ref({
   newTaskShowDownloading: config.newTaskShowDownloading !== false,
 })
 
-const dialogTop = computed(() => showAdvanced.value ? '8vh' : '12vh')
-const maxSplit = computed(() => (config.engineMaxConnectionPerServer as number) || 64)
+const dialogTop = computed(() => (showAdvanced.value ? '8vh' : '12vh'))
+const maxSplit = computed(() => config.engineMaxConnectionPerServer || 64)
 
 const fileColumns: DataTableColumns = [
   { type: 'selection' },
@@ -69,109 +88,125 @@ const fileColumns: DataTableColumns = [
     title: 'Size',
     key: 'length',
     width: 100,
-    render(row: any) {
-      return bytesToSize(row.length)
-    }
+    render(row: Record<string, unknown>) {
+      return bytesToSize(row.length as number)
+    },
   },
 ]
 
 const checkedRowKeys = computed({
   get: () => selectedFileIndices.value,
-  set: (keys: number[]) => { selectedFileIndices.value = keys }
+  set: (keys: number[]) => {
+    selectedFileIndices.value = keys
+  },
 })
 
 onMounted(async () => {
   if (!form.value.dir) {
-    try { form.value.dir = await downloadDir() } catch { form.value.dir = '~/Downloads' }
+    try {
+      form.value.dir = await downloadDir()
+    } catch (e) {
+      logger.debug('AddTask.dir', e)
+      form.value.dir = '~/Downloads'
+    }
   }
 })
 
-watch(() => props.type, (val) => { if (val) activeTab.value = val })
+watch(
+  () => props.type,
+  (val) => {
+    if (val) activeTab.value = val
+  },
+)
 
-watch(() => props.show, async (visible) => {
-  if (!visible) return
-  if (appStore.droppedTorrentPaths.length > 0) {
-    activeTab.value = ADD_TASK_TYPE.TORRENT
-    await loadTorrentFromPath(appStore.droppedTorrentPaths[0])
-    return
-  }
-  if (activeTab.value === ADD_TASK_TYPE.URI && !form.value.uris) {
-    if (appStore.addTaskUrl) {
-      form.value.uris = appStore.addTaskUrl
-      appStore.addTaskUrl = ''
+watch(
+  () => props.show,
+  async (visible) => {
+    if (!visible) return
+    if (appStore.droppedTorrentPaths.length > 0) {
+      await loadDroppedFile(appStore.droppedTorrentPaths[0])
       return
     }
-    try {
-      const { readText } = await import('@tauri-apps/plugin-clipboard-manager')
-      const text = await readText()
-      if (text && detectResource(text)) {
-        form.value.uris = text.trim()
+    if (activeTab.value === ADD_TASK_TYPE.URI && !form.value.uris) {
+      if (appStore.addTaskUrl) {
+        form.value.uris = appStore.addTaskUrl
+        appStore.addTaskUrl = ''
+        return
       }
-    } catch {}
-  }
-})
+      try {
+        const { readText } = await import('@tauri-apps/plugin-clipboard-manager')
+        const text = await readText()
+        if (text && detectResource(text)) {
+          form.value.uris = text.trim()
+        }
+      } catch (e) {
+        logger.debug('AddTask.readClipboard', e)
+      }
+    }
+  },
+)
 
-watch(() => appStore.droppedTorrentPaths, async (paths) => {
-  if (paths.length > 0 && props.show) {
-    activeTab.value = ADD_TASK_TYPE.TORRENT
-    await loadTorrentFromPath(paths[0])
+watch(
+  () => appStore.droppedTorrentPaths,
+  async (paths) => {
+    if (paths.length > 0 && props.show) {
+      await loadDroppedFile(paths[0])
+    }
+  },
+)
+
+/**
+ * Loads a dropped file (torrent or metalink) by detecting its extension.
+ * Sets the appropriate base64 data and switches to the torrent tab.
+ */
+async function loadDroppedFile(filePath: string) {
+  const lower = filePath.toLowerCase()
+  activeTab.value = ADD_TASK_TYPE.TORRENT
+
+  if (lower.endsWith('.metalink') || lower.endsWith('.meta4')) {
+    // Metalink file: read as base64 for addMetalink API
+    try {
+      clearTorrent() // fully reset all torrent state before loading metalink
+      const bytes = await readFile(filePath)
+      const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+      metalinkBase64.value = uint8ToBase64(uint8)
+      torrentName.value =
+        filePath.substring(Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1) || 'unknown.metalink'
+      torrentLoaded.value = true
+    } catch (e) {
+      logger.error('AddTask.loadMetalink', e)
+    }
+  } else {
+    // Torrent file
+    metalinkBase64.value = ''
+    await loadTorrentFromPath(filePath)
   }
-})
+}
 
 async function loadTorrentFromPath(filePath: string) {
   try {
     const bytes = await readFile(filePath)
     const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
-    torrentName.value = filePath.substring(Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1) || 'unknown.torrent'
+    torrentName.value =
+      filePath.substring(Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')) + 1) || 'unknown.torrent'
     torrentBase64.value = uint8ToBase64(uint8)
     torrentLoaded.value = true
     await parseTorrentData(uint8)
   } catch (e) {
-    console.error('loadTorrentFromPath error:', e)
+    logger.error('AddTask.loadTorrentFromPath', e)
   }
-}
-
-function uint8ToBase64(uint8: Uint8Array): string {
-  let binary = ''
-  for (let i = 0; i < uint8.length; i++) {
-    binary += String.fromCharCode(uint8[i])
-  }
-  return btoa(binary)
 }
 
 async function parseTorrentData(uint8: Uint8Array) {
   try {
-    const decoded = bencode.decode(uint8) as any
-    const info = decoded.info
-    if (!info) return
+    const result = await parseTorrentBuffer(uint8, bencode)
+    if (!result) return
 
-    const infoBytes = bencode.encode(info)
-    const hashBuffer = await crypto.subtle.digest('SHA-1', new Uint8Array(infoBytes).buffer as ArrayBuffer)
-    torrentInfoHash.value = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
-
-    const textDecoder = new TextDecoder('utf-8', { fatal: false })
-    const decodeName = (v: any) => v instanceof Uint8Array ? textDecoder.decode(v) : String(v)
-
-    if (info.files && info.files.length > 0) {
-      torrentFiles.value = info.files.map((f: any, i: number) => {
-        const pathParts = (f.path || f['path.utf-8'] || []).map(decodeName)
-        return {
-          idx: i + 1,
-          path: pathParts.join('/') || `file-${i + 1}`,
-          length: f.length || 0,
-        }
-      })
-      selectedFileIndices.value = torrentFiles.value.map(f => f.idx)
-    } else if (info.name) {
-      torrentFiles.value = [{
-        idx: 1,
-        path: decodeName(info['name.utf-8'] || info.name),
-        length: info.length || 0,
-      }]
-      selectedFileIndices.value = [1]
-    }
+    torrentInfoHash.value = result.infoHash
+    torrentFiles.value = result.files
+    selectedFileIndices.value = result.files.map((f) => f.idx)
   } catch (e) {
-    console.error('parseTorrentData error:', e)
+    logger.error('AddTask.parseTorrentData', e)
     torrentFiles.value = []
     selectedFileIndices.value = []
   }
@@ -184,6 +219,7 @@ function clearTorrent() {
   torrentInfoHash.value = ''
   torrentFiles.value = []
   selectedFileIndices.value = []
+  metalinkBase64.value = ''
 }
 
 function handleTabChange(name: string) {
@@ -202,10 +238,10 @@ function handleTabChange(name: string) {
       if (wrapper) {
         const endHeight = wrapper.scrollHeight
         if (Math.abs(startHeight - endHeight) > 2) {
-          wrapper.animate(
-            [{ height: startHeight + 'px' }, { height: endHeight + 'px' }],
-            { duration: 300, easing: 'cubic-bezier(0.2, 0, 0, 1)' }
-          )
+          wrapper.animate([{ height: startHeight + 'px' }, { height: endHeight + 'px' }], {
+            duration: 300,
+            easing: 'cubic-bezier(0.2, 0, 0, 1)',
+          })
         }
       }
     })
@@ -215,18 +251,22 @@ function handleTabChange(name: string) {
 async function chooseDirectory() {
   try {
     const selected = await openDialog({ directory: true, multiple: false })
-    if (selected) form.value.dir = selected as string
-  } catch {}
+    if (typeof selected === 'string') form.value.dir = selected
+  } catch (e) {
+    logger.debug('AddTask.chooseDirectory', e)
+  }
 }
 
 async function chooseTorrentFile() {
   try {
     const selected = await openDialog({
       multiple: false,
-      filters: [{ name: 'Torrent', extensions: ['torrent'] }]
+      filters: [{ name: 'Torrent', extensions: ['torrent'] }],
     })
-    if (selected) await loadTorrentFromPath(selected as string)
-  } catch {}
+    if (typeof selected === 'string') await loadTorrentFromPath(selected)
+  } catch (e) {
+    logger.debug('AddTask.chooseTorrentFile', e)
+  }
 }
 
 function handleClose() {
@@ -241,7 +281,7 @@ async function handleSubmit() {
     if (activeTab.value === ADD_TASK_TYPE.URI) {
       if (!form.value.uris.trim()) return
       const uris = form.value.uris.split('\n').filter((u: string) => u.trim())
-      const options: Record<string, unknown> = {
+      const options: Aria2EngineOptions = {
         dir: form.value.dir,
         split: String(form.value.split),
         out: form.value.out || undefined,
@@ -270,34 +310,44 @@ async function handleSubmit() {
       if (torrentInfoHash.value && isEngineReady()) {
         const { getClient } = await import('@/api/aria2')
         const [active, waiting] = await Promise.all([
-          getClient().call('tellActive', ['infoHash']) as Promise<{infoHash?: string}[]>,
-          getClient().call('tellWaiting', 0, 1000, ['infoHash']) as Promise<{infoHash?: string}[]>,
+          getClient().call<{ infoHash?: string }[]>('tellActive', ['infoHash']),
+          getClient().call<{ infoHash?: string }[]>('tellWaiting', 0, 1000, ['infoHash']),
         ])
-        const existing = [...active, ...waiting].map(t => t.infoHash).filter(Boolean)
+        const existing = [...active, ...waiting].map((t) => t.infoHash).filter(Boolean)
         if (existing.includes(torrentInfoHash.value)) {
           message.warning(t('task.duplicate-task'), { duration: 5000, closable: true })
           return
         }
       }
-      const options: Record<string, unknown> = { dir: form.value.dir }
+      const options: Aria2EngineOptions = { dir: form.value.dir }
       if (selectedFileIndices.value.length > 0 && selectedFileIndices.value.length < torrentFiles.value.length) {
         options['select-file'] = selectedFileIndices.value.join(',')
       }
       await taskStore.addTorrent({ torrent: torrentBase64.value, options })
+    } else if (activeTab.value === ADD_TASK_TYPE.TORRENT && metalinkBase64.value) {
+      // Metalink file import
+      const options: Aria2EngineOptions = { dir: form.value.dir }
+      await taskStore.addMetalink({ metalink: metalinkBase64.value, options })
     } else {
       return
     }
+    message.success(t('task.add-task-success') || 'Task added successfully')
     handleClose()
     if (form.value.newTaskShowDownloading) {
-      router.push({ path: '/task/active' }).catch(() => {})
+      router.push({ path: '/task/active' }).catch(() => {
+        /* duplicate navigation */
+      })
     }
-  } catch (e: any) {
-    const errMsg = e?.message || String(e)
-    console.error('[AddTask] submit error:', e)
+  } catch (e: unknown) {
+    const errMsg = e instanceof Error ? e.message : String(e)
+    logger.error('AddTask.submit', e)
     if (errMsg.includes('not initialized') || !isEngineReady()) {
       message.error(t('app.engine-not-ready'), { duration: 5000, closable: true })
     } else if (/duplicate|already/i.test(errMsg)) {
-      message.warning(t('task.duplicate-task') || 'This task already exists and cannot be added again.', { duration: 5000, closable: true })
+      message.warning(t('task.duplicate-task') || 'This task already exists and cannot be added again.', {
+        duration: 5000,
+        closable: true,
+      })
     } else {
       message.error(errMsg, { duration: 5000, closable: true })
     }
@@ -314,8 +364,12 @@ function handleHotkey(event: KeyboardEvent) {
   }
 }
 
-onMounted(() => { document.addEventListener('keydown', handleHotkey) })
-onUnmounted(() => { document.removeEventListener('keydown', handleHotkey) })
+onMounted(() => {
+  document.addEventListener('keydown', handleHotkey)
+})
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleHotkey)
+})
 </script>
 
 <template>
@@ -326,126 +380,92 @@ onUnmounted(() => { document.removeEventListener('keydown', handleHotkey) })
     :auto-focus="false"
     transform-origin="center"
     :transition="{ name: 'fade-scale' }"
-    @update:show="(v: boolean) => { if (!v) handleClose() }"
+    @update:show="
+      (v: boolean) => {
+        if (!v) handleClose()
+      }
+    "
   >
     <NCard
       :title="t('task.new-task')"
       closable
-      @close="handleClose"
       class="add-task-card"
       :style="{ maxWidth: '680px', minWidth: '380px', width: '70vw', marginTop: dialogTop }"
       :content-style="{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden' }"
       :segmented="{ footer: true }"
+      @close="handleClose"
     >
       <NForm label-placement="left" label-width="110px">
         <NTabs :value="activeTab" type="line" animated @update:value="handleTabChange">
           <NTabPane :name="ADD_TASK_TYPE.URI" :tab="t('task.uri-task') || 'URL'">
             <div class="tab-pane-content">
-              <NFormItem :show-label="false" style="margin-bottom: 0;">
+              <NFormItem :show-label="false" style="margin-bottom: 0">
                 <NInput
+                  v-model:value="form.uris"
                   type="textarea"
                   :rows="5"
                   :placeholder="t('task.uri-task-tips') || 'One URL per line'"
-                  v-model:value="form.uris"
                 />
               </NFormItem>
             </div>
           </NTabPane>
           <NTabPane :name="ADD_TASK_TYPE.TORRENT" :tab="t('task.torrent-task') || 'Torrent'">
-            <div class="tab-pane-content">
-              <Transition name="torrent-swap" mode="out-in">
-                <div v-if="torrentLoaded" key="loaded" class="torrent-loaded">
-                  <div class="torrent-info-row">
-                    <NTooltip>
-                      <template #trigger>
-                        <div class="torrent-filename">
-                          <NIcon :size="18" style="margin-right: 6px; flex-shrink: 0;"><CloudUploadOutline /></NIcon>
-                          <span>{{ torrentName }}</span>
-                        </div>
-                      </template>
-                      {{ torrentName }}
-                    </NTooltip>
-                    <NButton quaternary size="small" type="error" @click="clearTorrent">
-                      <template #icon><NIcon :size="16"><TrashOutline /></NIcon></template>
-                    </NButton>
-                  </div>
-                  <div v-if="torrentFiles.length > 0" class="torrent-file-list">
-                    <NDataTable
-                      :columns="fileColumns"
-                      :data="torrentFiles"
-                      :row-key="(row: any) => row.idx as number"
-                      v-model:checked-row-keys="checkedRowKeys"
-                      size="small"
-                      :max-height="200"
-                      :scroll-x="400"
-                    />
-                  </div>
+            <TorrentUpload
+              :loaded="torrentLoaded"
+              :name="torrentName"
+              @choose="chooseTorrentFile"
+              @clear="clearTorrent"
+            >
+              <template #file-list>
+                <div v-if="torrentFiles.length > 0" class="torrent-file-list">
+                  <NDataTable
+                    v-model:checked-row-keys="checkedRowKeys"
+                    :columns="fileColumns"
+                    :data="torrentFiles"
+                    :row-key="(row: any) => row.idx as number"
+                    size="small"
+                    :max-height="200"
+                    :scroll-x="400"
+                  />
                 </div>
-                <div v-else key="empty" class="torrent-upload" @click="chooseTorrentFile">
-                  <NIcon :size="48" :depth="3"><CloudUploadOutline /></NIcon>
-                  <NText style="display: block; margin-top: 8px; font-size: 14px;">
-                    {{ t('task.select-torrent') || 'Drag torrent here or click to select' }}
-                  </NText>
-                </div>
-              </Transition>
-            </div>
+              </template>
+              <template #placeholder>{{ t('task.select-torrent') || 'Drag torrent here or click to select' }}</template>
+            </TorrentUpload>
           </NTabPane>
         </NTabs>
-          <div class="tab-shared-form">
-            <NGrid :cols="24" :x-gap="12">
-              <NGridItem :span="15">
-                <NFormItem :label="t('task.task-out') + ':'">
-                  <NInput :placeholder="t('task.task-out-tips')" v-model:value="form.out" :autofocus="false" />
-                </NFormItem>
-              </NGridItem>
-              <NGridItem :span="9">
-                <NFormItem :label="t('task.task-split') + ':'">
-                  <NInputNumber v-model:value="form.split" :min="1" :max="maxSplit" style="width: 100%;" />
-                </NFormItem>
-              </NGridItem>
-            </NGrid>
-            <NFormItem :label="t('task.task-dir') + ':'">
-              <NInputGroup>
-                <NInput v-model:value="form.dir" style="flex: 1;" />
-                <NButton @click="chooseDirectory">
-                  <template #icon><NIcon><FolderOpenOutline /></NIcon></template>
-                </NButton>
-              </NInputGroup>
-            </NFormItem>
-            <NFormItem :show-label="false">
-              <NCheckbox v-model:checked="showAdvanced">
-                {{ t('task.show-advanced-options') }}
-              </NCheckbox>
-            </NFormItem>
-            <NCollapseTransition :show="showAdvanced">
-              <div>
-                <NFormItem :label="t('task.task-user-agent') + ':'">
-                  <NInput type="textarea" :autosize="{ minRows: 2, maxRows: 3 }" v-model:value="form.userAgent" />
-                </NFormItem>
-                <NFormItem :label="t('task.task-authorization') + ':'">
-                  <NInput type="textarea" :autosize="{ minRows: 2, maxRows: 3 }" v-model:value="form.authorization" />
-                </NFormItem>
-                <NFormItem :label="t('task.task-referer') + ':'">
-                  <NInput type="textarea" :autosize="{ minRows: 2, maxRows: 3 }" v-model:value="form.referer" />
-                </NFormItem>
-                <NFormItem :label="t('task.task-cookie') + ':'">
-                  <NInput type="textarea" :autosize="{ minRows: 2, maxRows: 3 }" v-model:value="form.cookie" />
-                </NFormItem>
-                <NGrid :cols="24" :x-gap="12">
-                  <NGridItem :span="16">
-                    <NFormItem :label="t('task.task-proxy') + ':'">
-                      <NInput placeholder="[http://][USER:PASSWORD@]HOST[:PORT]" v-model:value="form.allProxy" />
-                    </NFormItem>
-                  </NGridItem>
-                </NGrid>
-                <NFormItem :show-label="false">
-                  <NCheckbox v-model:checked="form.newTaskShowDownloading">
-                    {{ t('task.navigate-to-downloading') }}
-                  </NCheckbox>
-                </NFormItem>
-              </div>
-            </NCollapseTransition>
-          </div>
+        <div class="tab-shared-form">
+          <NGrid :cols="24" :x-gap="12">
+            <NGridItem :span="15">
+              <NFormItem :label="t('task.task-out') + ':'">
+                <NInput v-model:value="form.out" :placeholder="t('task.task-out-tips')" :autofocus="false" />
+              </NFormItem>
+            </NGridItem>
+            <NGridItem :span="9">
+              <NFormItem :label="t('task.task-split') + ':'">
+                <NInputNumber v-model:value="form.split" :min="1" :max="maxSplit" style="width: 100%" />
+              </NFormItem>
+            </NGridItem>
+          </NGrid>
+          <NFormItem :label="t('task.task-dir') + ':'">
+            <NInputGroup>
+              <NInput v-model:value="form.dir" style="flex: 1" />
+              <NButton @click="chooseDirectory">
+                <template #icon>
+                  <NIcon><FolderOpenOutline /></NIcon>
+                </template>
+              </NButton>
+            </NInputGroup>
+          </NFormItem>
+          <AdvancedOptions
+            v-model:show="showAdvanced"
+            v-model:user-agent="form.userAgent"
+            v-model:authorization="form.authorization"
+            v-model:referer="form.referer"
+            v-model:cookie="form.cookie"
+            v-model:all-proxy="form.allProxy"
+            v-model:new-task-show-downloading="form.newTaskShowDownloading"
+          />
+        </div>
       </NForm>
       <template #footer>
         <NSpace justify="end">
@@ -458,64 +478,6 @@ onUnmounted(() => { document.removeEventListener('keydown', handleHotkey) })
 </template>
 
 <style scoped>
-.tab-pane-content {
-  min-height: 150px;
-  padding-bottom: 12px;
-}
-.torrent-swap-enter-active {
-  transition: opacity 0.22s cubic-bezier(0.2, 0, 0, 1), transform 0.22s cubic-bezier(0.2, 0, 0, 1);
-}
-.torrent-swap-leave-active {
-  transition: opacity 0.15s cubic-bezier(0.3, 0, 0.8, 0.15), transform 0.15s cubic-bezier(0.3, 0, 0.8, 0.15);
-}
-.torrent-swap-enter-from {
-  opacity: 0;
-  transform: scale(0.96);
-}
-.torrent-swap-leave-to {
-  opacity: 0;
-  transform: scale(0.96);
-}
-.torrent-upload {
-  min-height: 138px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  border: 1px dashed rgba(255, 255, 255, 0.15);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 0.2s cubic-bezier(0.2, 0, 0, 1);
-}
-.torrent-upload:hover {
-  border-color: var(--color-primary);
-}
-.torrent-info-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  margin-bottom: 10px;
-}
-.torrent-filename {
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 14px;
-  flex: 1;
-  min-width: 0;
-}
-.torrent-filename span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .torrent-file-list {
   margin-top: 4px;
 }

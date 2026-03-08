@@ -1,52 +1,81 @@
 <script setup lang="ts">
+/** @fileoverview Individual task row in the task list with progress and controls. */
 import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { TASK_STATUS } from '@shared/constants'
-import { checkTaskIsSeeder, getTaskName, calcProgress, bytesToSize, timeRemaining, timeFormat, checkTaskIsBT } from '@shared/utils'
+import {
+  checkTaskIsSeeder,
+  getTaskName,
+  calcProgress,
+  bytesToSize,
+  timeRemaining,
+  timeFormat,
+  checkTaskIsBT,
+} from '@shared/utils'
 import { exists } from '@tauri-apps/plugin-fs'
+import { logger } from '@shared/logger'
 import { NProgress, NIcon } from 'naive-ui'
-import { ArrowUpOutline, ArrowDownOutline, GitNetworkOutline, MagnetOutline, AlertCircleOutline, CloudUploadOutline, CheckmarkCircleOutline, TrashOutline } from '@vicons/ionicons5'
+import {
+  ArrowUpOutline,
+  ArrowDownOutline,
+  GitNetworkOutline,
+  MagnetOutline,
+  AlertCircleOutline,
+  CloudUploadOutline,
+  CheckmarkCircleOutline,
+  TrashOutline,
+} from '@vicons/ionicons5'
 import TaskItemActions from './TaskItemActions.vue'
+import type { Aria2Task } from '@shared/types'
 
-const props = defineProps<{ task: Record<string, unknown> }>()
+const props = defineProps<{ task: Aria2Task }>()
 const emit = defineEmits<{
-  pause: [task: Record<string, unknown>]
-  resume: [task: Record<string, unknown>]
-  delete: [task: Record<string, unknown>]
-  'delete-record': [task: Record<string, unknown>]
-  'copy-link': [task: Record<string, unknown>]
-  'show-info': [task: Record<string, unknown>]
-  folder: [task: Record<string, unknown>]
-  'stop-seeding': [task: Record<string, unknown>]
+  pause: [task: Aria2Task]
+  resume: [task: Aria2Task]
+  delete: [task: Aria2Task]
+  'delete-record': [task: Aria2Task]
+  'copy-link': [task: Aria2Task]
+  'show-info': [task: Aria2Task]
+  folder: [task: Aria2Task]
+  'stop-seeding': [task: Aria2Task]
 }>()
 
 const { t } = useI18n()
 
 const taskFullName = computed(() =>
-  getTaskName(props.task as never, { defaultName: t('task.get-task-name') || 'Unknown', maxLen: -1 })
+  getTaskName(props.task, { defaultName: t('task.get-task-name') || 'Unknown', maxLen: -1 }),
 )
 
-const isSeeder = computed(() => checkTaskIsSeeder(props.task as never))
-const isBT = computed(() => checkTaskIsBT(props.task as never))
-const taskStatus = computed(() => isSeeder.value ? TASK_STATUS.SEEDING : (props.task.status as string))
+const isSeeder = computed(() => checkTaskIsSeeder(props.task))
+const isBT = computed(() => checkTaskIsBT(props.task))
+const taskStatus = computed(() => (isSeeder.value ? TASK_STATUS.SEEDING : props.task.status))
 const isActive = computed(() => props.task.status === TASK_STATUS.ACTIVE)
 
-const percent = computed(() => calcProgress(props.task.totalLength as number, props.task.completedLength as number))
-const completedSize = computed(() => bytesToSize(props.task.completedLength as string, 2))
-const totalSize = computed(() => bytesToSize(props.task.totalLength as string, 2))
-const downloadSpeed = computed(() => bytesToSize(props.task.downloadSpeed as string))
-const uploadSpeed = computed(() => bytesToSize(props.task.uploadSpeed as string))
+const percent = computed(() => calcProgress(props.task.totalLength, props.task.completedLength))
+const completedSize = computed(() => bytesToSize(props.task.completedLength, 2))
+const totalSize = computed(() => bytesToSize(props.task.totalLength, 2))
+const downloadSpeed = computed(() => bytesToSize(props.task.downloadSpeed))
+const uploadSpeed = computed(() => bytesToSize(props.task.uploadSpeed))
 
 const remaining = computed(() => {
   if (!isActive.value) return 0
-  return timeRemaining(Number(props.task.totalLength), Number(props.task.completedLength), Number(props.task.downloadSpeed))
+  return timeRemaining(
+    Number(props.task.totalLength),
+    Number(props.task.completedLength),
+    Number(props.task.downloadSpeed),
+  )
 })
 
 const remainingText = computed(() => {
   if (remaining.value <= 0) return ''
   return timeFormat(remaining.value, {
     prefix: t('task.remaining-prefix') || '',
-    i18n: { gt1d: t('app.gt1d') || '>1d', hour: t('app.hour') || 'h', minute: t('app.minute') || 'm', second: t('app.second') || 's' },
+    i18n: {
+      gt1d: t('app.gt1d') || '>1d',
+      hour: t('app.hour') || 'h',
+      minute: t('app.minute') || 'm',
+      second: t('app.second') || 's',
+    },
   })
 })
 
@@ -63,15 +92,18 @@ const statusColorMap: Record<string, string> = {
 const progressColor = computed(() => statusColorMap[taskStatus.value] || '#E0A422')
 
 const finishedTag = computed(() => {
-  const s = props.task.status as string
-  if (s === TASK_STATUS.COMPLETE) return { label: t('task.task-complete') || 'Completed', color: '#67C23A', icon: CheckmarkCircleOutline }
-  if (s === TASK_STATUS.ERROR) return { label: t('task.task-error') || 'Error', color: '#F56C6C', icon: AlertCircleOutline }
-  if (s === TASK_STATUS.REMOVED) return { label: t('task.task-removed') || 'Removed', color: '#909399', icon: TrashOutline }
+  const s = props.task.status
+  if (s === TASK_STATUS.COMPLETE)
+    return { label: t('task.task-complete') || 'Completed', color: '#67C23A', icon: CheckmarkCircleOutline }
+  if (s === TASK_STATUS.ERROR)
+    return { label: t('task.task-error') || 'Error', color: '#F56C6C', icon: AlertCircleOutline }
+  if (s === TASK_STATUS.REMOVED)
+    return { label: t('task.task-removed') || 'Removed', color: '#909399', icon: TrashOutline }
   return null
 })
 
 function onDblClick() {
-  const s = props.task.status as string
+  const s = props.task.status
   if (s === TASK_STATUS.COMPLETE) return
   if (s === TASK_STATUS.ACTIVE) emit('pause', props.task)
   else if (s === TASK_STATUS.WAITING || s === TASK_STATUS.PAUSED) emit('resume', props.task)
@@ -81,13 +113,13 @@ function onDblClick() {
 const fileMissing = ref(false)
 
 async function checkFileExists() {
-  const status = props.task.status as string
+  const status = props.task.status
   if (status === TASK_STATUS.ACTIVE || status === TASK_STATUS.WAITING) {
     fileMissing.value = false
     return
   }
-  const dir = props.task.dir as string
-  const files = props.task.files as { path?: string }[] | undefined
+  const dir = props.task.dir
+  const files = props.task.files
   if (!files || files.length === 0 || !dir) {
     fileMissing.value = false
     return
@@ -97,7 +129,8 @@ async function checkFileExists() {
     if (firstFile) {
       fileMissing.value = !(await exists(firstFile))
     }
-  } catch {
+  } catch (e) {
+    logger.debug('TaskItem.fileCheck', e)
     fileMissing.value = false
   }
 }
@@ -190,7 +223,7 @@ watch(() => props.task.status, checkFileExists)
   background-color: var(--task-item-bg);
   border: 1px solid var(--task-item-border);
   border-radius: 6px;
-  transition: border-color .2s cubic-bezier(0.2, 0, 0, 1);
+  transition: border-color 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 .task-item:hover {
   border-color: var(--task-item-hover-border);
@@ -223,20 +256,28 @@ watch(() => props.task.status, checkFileExists)
   animation: fade-in 0.3s ease;
 }
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 0.85; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.85;
+  }
 }
 .task-item.file-missing {
   border-color: rgba(232, 128, 128, 0.2);
 }
 .task-progress-info {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   font-size: 12px;
   line-height: 14px;
   min-height: 14px;
-  color: #9B9B9B;
+  color: #9b9b9b;
   margin-top: 8px;
+}
+.progress-left {
+  white-space: nowrap;
 }
 .progress-right {
   display: flex;
@@ -262,13 +303,13 @@ watch(() => props.task.status, checkFileExists)
   align-items: center;
   gap: 3px;
   font-size: 13px;
-  color: #67C23A;
+  color: #67c23a;
   opacity: 0.9;
   vertical-align: middle;
   animation: fade-in 0.3s ease;
 }
 .task-item.is-seeding {
-  border-left: 3px solid #67C23A;
+  border-left: 3px solid #67c23a;
   background: linear-gradient(90deg, rgba(103, 194, 58, 0.04) 0%, transparent 40%);
 }
 .status-tag {
@@ -281,8 +322,9 @@ watch(() => props.task.status, checkFileExists)
   animation: fade-in 0.3s ease;
 }
 .error-message {
+  flex-basis: 100%;
   font-size: 11px;
-  color: #F56C6C;
+  color: #f56c6c;
   margin-top: 4px;
   opacity: 0.85;
   word-break: break-all;

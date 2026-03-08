@@ -1,4 +1,5 @@
 use crate::engine;
+use crate::error::AppError;
 use crate::tray::TrayMenuState;
 use serde_json::Value;
 use tauri::window::ProgressBarState;
@@ -6,9 +7,12 @@ use tauri::AppHandle;
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
+/// Reads all user preferences from the `user.json` store.
 #[tauri::command]
-pub fn get_app_config(app: AppHandle) -> Result<Value, String> {
-    let store = app.store("user.json").map_err(|e| e.to_string())?;
+pub fn get_app_config(app: AppHandle) -> Result<Value, AppError> {
+    let store = app
+        .store("user.json")
+        .map_err(|e| AppError::Store(e.to_string()))?;
     let entries: serde_json::Map<String, Value> = store
         .entries()
         .into_iter()
@@ -17,9 +21,12 @@ pub fn get_app_config(app: AppHandle) -> Result<Value, String> {
     Ok(Value::Object(entries))
 }
 
+/// Merges the given key-value pairs into the `user.json` store.
 #[tauri::command]
-pub fn save_preference(app: AppHandle, config: Value) -> Result<(), String> {
-    let store = app.store("user.json").map_err(|e| e.to_string())?;
+pub fn save_preference(app: AppHandle, config: Value) -> Result<(), AppError> {
+    let store = app
+        .store("user.json")
+        .map_err(|e| AppError::Store(e.to_string()))?;
     if let Some(obj) = config.as_object() {
         for (key, value) in obj {
             store.set(key.clone(), value.clone());
@@ -28,9 +35,12 @@ pub fn save_preference(app: AppHandle, config: Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Reads all system-level configuration from the `system.json` store.
 #[tauri::command]
-pub fn get_system_config(app: AppHandle) -> Result<Value, String> {
-    let store = app.store("system.json").map_err(|e| e.to_string())?;
+pub fn get_system_config(app: AppHandle) -> Result<Value, AppError> {
+    let store = app
+        .store("system.json")
+        .map_err(|e| AppError::Store(e.to_string()))?;
     let entries: serde_json::Map<String, Value> = store
         .entries()
         .into_iter()
@@ -39,9 +49,12 @@ pub fn get_system_config(app: AppHandle) -> Result<Value, String> {
     Ok(Value::Object(entries))
 }
 
+/// Merges the given key-value pairs into the `system.json` store.
 #[tauri::command]
-pub fn save_system_config(app: AppHandle, config: Value) -> Result<(), String> {
-    let store = app.store("system.json").map_err(|e| e.to_string())?;
+pub fn save_system_config(app: AppHandle, config: Value) -> Result<(), AppError> {
+    let store = app
+        .store("system.json")
+        .map_err(|e| AppError::Store(e.to_string()))?;
     if let Some(obj) = config.as_object() {
         for (key, value) in obj {
             store.set(key.clone(), value.clone());
@@ -50,36 +63,51 @@ pub fn save_system_config(app: AppHandle, config: Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Starts the aria2c engine process with current system configuration.
 #[tauri::command]
-pub fn start_engine_command(app: AppHandle) -> Result<(), String> {
+pub fn start_engine_command(app: AppHandle) -> Result<(), AppError> {
     let config = get_system_config(app.clone())?;
-    engine::start_engine(&app, &config)
+    engine::start_engine(&app, &config).map_err(|e| AppError::Engine(e))
 }
 
+/// Gracefully stops the running aria2c engine process.
 #[tauri::command]
-pub fn stop_engine_command(app: AppHandle) -> Result<(), String> {
-    engine::stop_engine(&app)
+pub fn stop_engine_command(app: AppHandle) -> Result<(), AppError> {
+    engine::stop_engine(&app).map_err(|e| AppError::Engine(e))
 }
 
+/// Stops and restarts the aria2c engine with current system configuration.
 #[tauri::command]
-pub fn restart_engine_command(app: AppHandle) -> Result<(), String> {
+pub fn restart_engine_command(app: AppHandle) -> Result<(), AppError> {
     let config = get_system_config(app.clone())?;
-    engine::restart_engine(&app, &config)
+    engine::restart_engine(&app, &config).map_err(|e| AppError::Engine(e))
 }
 
+/// Clears user, system, and preference stores, resetting the app to defaults.
 #[tauri::command]
-pub fn factory_reset(app: AppHandle) -> Result<(), String> {
-    let user_store = app.store("user.json").map_err(|e| e.to_string())?;
+pub fn factory_reset(app: AppHandle) -> Result<(), AppError> {
+    let user_store = app
+        .store("user.json")
+        .map_err(|e| AppError::Store(e.to_string()))?;
     user_store.clear();
-    let system_store = app.store("system.json").map_err(|e| e.to_string())?;
+    let system_store = app
+        .store("system.json")
+        .map_err(|e| AppError::Store(e.to_string()))?;
     system_store.clear();
+    // Also clear config.json where frontend preferences are persisted
+    let config_store = app
+        .store("config.json")
+        .map_err(|e| AppError::Store(e.to_string()))?;
+    config_store.clear();
     Ok(())
 }
 
+/// Updates the system tray title text (macOS menu bar display).
 #[tauri::command]
-pub fn update_tray_title(app: AppHandle, title: String) -> Result<(), String> {
+pub fn update_tray_title(app: AppHandle, title: String) -> Result<(), AppError> {
     if let Some(tray) = app.tray_by_id("main") {
-        tray.set_title(Some(&title)).map_err(|e| e.to_string())?;
+        tray.set_title(Some(&title))
+            .map_err(|e| AppError::Io(e.to_string()))?;
         // Workaround: re-set icon after set_title to prevent macOS icon disappearing (Tauri/tao bug)
         if let Some(icon) = app.default_window_icon() {
             let _ = tray.set_icon(Some(icon.clone()));
@@ -88,10 +116,14 @@ pub fn update_tray_title(app: AppHandle, title: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Updates localized labels on tray menu items by their IDs.
 #[tauri::command]
-pub fn update_tray_menu_labels(app: AppHandle, labels: Value) -> Result<(), String> {
+pub fn update_tray_menu_labels(app: AppHandle, labels: Value) -> Result<(), AppError> {
     let state = app.state::<TrayMenuState>();
-    let items = state.items.lock().map_err(|e| e.to_string())?;
+    let items = state
+        .items
+        .lock()
+        .map_err(|e| AppError::Store(e.to_string()))?;
     if let Some(obj) = labels.as_object() {
         for (id, text) in obj {
             if let Some(item) = items.get(id.as_str()) {
@@ -102,8 +134,9 @@ pub fn update_tray_menu_labels(app: AppHandle, labels: Value) -> Result<(), Stri
     Ok(())
 }
 
+/// Updates localized labels on application menu items by their IDs.
 #[tauri::command]
-pub fn update_menu_labels(app: AppHandle, labels: Value) -> Result<(), String> {
+pub fn update_menu_labels(app: AppHandle, labels: Value) -> Result<(), AppError> {
     use tauri::menu::MenuItemKind;
     if let Some(menu) = app.menu() {
         if let Some(obj) = labels.as_object() {
@@ -125,8 +158,9 @@ pub fn update_menu_labels(app: AppHandle, labels: Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Updates the taskbar/dock progress bar (0.0–1.0 for progress, negative to clear).
 #[tauri::command]
-pub fn update_progress_bar(app: AppHandle, progress: f64) -> Result<(), String> {
+pub fn update_progress_bar(app: AppHandle, progress: f64) -> Result<(), AppError> {
     if let Some(window) = app.get_webview_window("main") {
         if progress < 0.0 {
             let _ = window.set_progress_bar(ProgressBarState {
@@ -143,8 +177,9 @@ pub fn update_progress_bar(app: AppHandle, progress: f64) -> Result<(), String> 
     Ok(())
 }
 
+/// Updates the macOS dock badge label (empty string clears the badge).
 #[tauri::command]
-pub fn update_dock_badge(app: AppHandle, label: String) -> Result<(), String> {
+pub fn update_dock_badge(app: AppHandle, label: String) -> Result<(), AppError> {
     #[cfg(target_os = "macos")]
     {
         if let Some(window) = app.get_webview_window("main") {

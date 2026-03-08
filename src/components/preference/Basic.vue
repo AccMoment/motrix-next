@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/** @fileoverview Basic preference form: theme, locale, download dir, speed limits. */
 import { ref, computed, onMounted, watchSyncEffect, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { isEqual } from 'lodash-es'
@@ -9,10 +10,28 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { downloadDir } from '@tauri-apps/api/path'
 import { extractSpeedUnit } from '@shared/utils'
+import { logger } from '@shared/logger'
+import type { AppConfig } from '@shared/types'
 import {
-  NForm, NFormItem, NInput, NInputNumber, NSelect, NCheckbox, NSwitch,
-  NButton, NSpace, NDivider, NInputGroup, NText, NCollapseTransition, NTag, useDialog
+  NForm,
+  NFormItem,
+  NInput,
+  NInputNumber,
+  NSelect,
+  NCheckbox,
+  NSwitch,
+  NButton,
+  NSpace,
+  NDivider,
+  NInputGroup,
+  NText,
+  NCollapseTransition,
+  NTag,
+  NRadioGroup,
+  NRadioButton,
+  useDialog,
 } from 'naive-ui'
+import PreferenceActionBar from './PreferenceActionBar.vue'
 import { FolderOpenOutline, CloudDownloadOutline } from '@vicons/ionicons5'
 import { NIcon } from 'naive-ui'
 import { useAppMessage } from '@/composables/useAppMessage'
@@ -42,18 +61,19 @@ const checkIntervalOptions = [
 ]
 
 function buildForm() {
-  const config = (preferenceStore.config || {}) as Record<string, unknown>
+  const config = preferenceStore.config
   const followTorrent = config.followTorrent !== false
   const followMetalink = config.followMetalink !== false
   const pauseMetadata = !!config.pauseMetadata
   const btAutoDownloadContent = followTorrent && followMetalink && !pauseMetadata
   return {
     autoCheckUpdate: config.autoCheckUpdate !== false,
-    autoCheckUpdateInterval: (config.autoCheckUpdateInterval as number) || 24,
-    lastCheckUpdateTime: (config.lastCheckUpdateTime as number) || 0,
-    dir: (config.dir as string) || defaultDownloadDir.value,
-    locale: (config.locale as string) || 'en-US',
-    theme: (config.theme as string) || 'dark',
+    autoCheckUpdateInterval: Number(config.autoCheckUpdateInterval) || 24,
+    lastCheckUpdateTime: config.lastCheckUpdateTime || 0,
+    updateChannel: config.updateChannel || 'stable',
+    dir: config.dir || defaultDownloadDir.value,
+    locale: config.locale || 'en-US',
+    theme: config.theme || 'dark',
     openAtLogin: !!config.openAtLogin,
     keepWindowState: !!config.keepWindowState,
     resumeAllWhenAppLaunched: !!config.resumeAllWhenAppLaunched,
@@ -64,16 +84,16 @@ function buildForm() {
     taskNotification: config.taskNotification !== false,
     newTaskShowDownloading: config.newTaskShowDownloading !== false,
     noConfirmBeforeDeleteTask: !!config.noConfirmBeforeDeleteTask,
-    maxConcurrentDownloads: (config.maxConcurrentDownloads as number) || 5,
-    maxConnectionPerServer: (config.maxConnectionPerServer as number) || 16,
+    maxConcurrentDownloads: config.maxConcurrentDownloads || 5,
+    maxConnectionPerServer: config.maxConnectionPerServer || 16,
     maxOverallDownloadLimit: String(config.maxOverallDownloadLimit || '0'),
     maxOverallUploadLimit: String(config.maxOverallUploadLimit || '0'),
     btSaveMetadata: !!config.btSaveMetadata,
     btAutoDownloadContent,
     btForceEncryption: !!config.btForceEncryption,
     keepSeeding: config.keepSeeding !== false,
-    seedRatio: (config.seedRatio as number) || 1,
-    seedTime: (config.seedTime as number) || 60,
+    seedRatio: config.seedRatio || 1,
+    seedTime: config.seedTime || 60,
     continue: config.continue !== false,
   }
 }
@@ -81,13 +101,14 @@ function buildForm() {
 const form = ref(buildForm())
 const savedSnapshot = ref(JSON.parse(JSON.stringify(buildForm())))
 
-const isDirty = computed(() => !isEqual(
-  JSON.parse(JSON.stringify(form.value)),
-  savedSnapshot.value
-))
+const isDirty = computed(() => !isEqual(JSON.parse(JSON.stringify(form.value)), savedSnapshot.value))
 
-watchSyncEffect(() => { preferenceStore.pendingChanges = isDirty.value })
-onUnmounted(() => { preferenceStore.pendingChanges = false })
+watchSyncEffect(() => {
+  preferenceStore.pendingChanges = isDirty.value
+})
+onUnmounted(() => {
+  preferenceStore.pendingChanges = false
+})
 
 const uploadSpeedValue = ref(0)
 const uploadUnit = ref('K')
@@ -179,7 +200,7 @@ function onKeepSeedingChange(enable: boolean) {
 
 async function handleSelectDir() {
   const selected = await openDialog({ directory: true, multiple: false })
-  if (selected) form.value.dir = selected as string
+  if (typeof selected === 'string') form.value.dir = selected
 }
 
 function loadForm() {
@@ -200,7 +221,7 @@ function handleSave() {
   const newLocale = form.value.locale
   savedSnapshot.value = JSON.parse(JSON.stringify(form.value))
 
-  const data: Record<string, unknown> = { ...form.value }
+  const data: Partial<AppConfig> = { ...form.value }
 
   if (form.value.btAutoDownloadContent) {
     data.followTorrent = true
@@ -225,6 +246,11 @@ function handleSave() {
       'bt-force-encryption': String(!!form.value.btForceEncryption),
       'seed-ratio': String(form.value.seedRatio),
       'seed-time': String(form.value.seedTime),
+      'keep-seeding': String(!!form.value.keepSeeding),
+      'follow-torrent': String(data.followTorrent ?? true),
+      'follow-metalink': String(data.followMetalink ?? true),
+      'pause-metadata': String(data.pauseMetadata ?? false),
+      continue: String(form.value.continue !== false),
     },
   }).catch(console.error)
   message.success(t('preferences.save-success-message'))
@@ -235,7 +261,9 @@ function handleSave() {
       content: 'Restart the application to apply the new language.',
       positiveText: 'Restart Now',
       negativeText: 'Later',
-      onPositiveClick: () => { relaunch() },
+      onPositiveClick: () => {
+        relaunch()
+      },
     })
   }
 }
@@ -250,8 +278,16 @@ function handleCheckUpdate() {
 }
 
 onMounted(async () => {
-  try { defaultDownloadDir.value = await downloadDir() } catch {}
-  try { currentPlatform.value = platform() } catch {}
+  try {
+    defaultDownloadDir.value = await downloadDir()
+  } catch (e) {
+    logger.debug('Basic.downloadDir', e)
+  }
+  try {
+    currentPlatform.value = platform()
+  } catch (e) {
+    logger.debug('Basic.platform', e)
+  }
   loadForm()
 })
 </script>
@@ -265,23 +301,29 @@ onMounted(async () => {
       </NFormItem>
       <NCollapseTransition :show="form.autoCheckUpdate">
         <NFormItem :label="t('preferences.check-frequency')">
-          <NSelect
-            v-model:value="form.autoCheckUpdateInterval"
-            :options="checkIntervalOptions"
-            style="width: 180px;"
-          />
+          <NSelect v-model:value="form.autoCheckUpdateInterval" :options="checkIntervalOptions" style="width: 180px" />
+        </NFormItem>
+      </NCollapseTransition>
+      <NCollapseTransition :show="form.autoCheckUpdate">
+        <NFormItem :label="t('preferences.update-channel')">
+          <NRadioGroup v-model:value="form.updateChannel" size="small">
+            <NRadioButton value="stable">{{ t('preferences.update-channel-stable') }}</NRadioButton>
+            <NRadioButton value="beta">{{ t('preferences.update-channel-beta') }}</NRadioButton>
+          </NRadioGroup>
         </NFormItem>
       </NCollapseTransition>
       <NFormItem :label="t('preferences.last-check-update-time')">
-        <div style="display: flex; align-items: center; gap: 16px;">
+        <div style="display: flex; align-items: center; gap: 16px">
           <NButton size="small" @click="handleCheckUpdate">
-            <template #icon><NIcon :size="14"><CloudDownloadOutline /></NIcon></template>
+            <template #icon>
+              <NIcon :size="14"><CloudDownloadOutline /></NIcon>
+            </template>
             {{ t('app.check-updates-now') }}
           </NButton>
-          <NText v-if="form.lastCheckUpdateTime" depth="3" style="font-size: 13px;">
+          <NText v-if="form.lastCheckUpdateTime" depth="3" style="font-size: 13px">
             {{ new Date(form.lastCheckUpdateTime).toLocaleString() }}
           </NText>
-          <NText v-else depth="3" style="font-size: 13px;">—</NText>
+          <NText v-else depth="3" style="font-size: 13px">—</NText>
         </div>
       </NFormItem>
       <UpdateDialog ref="updateDialogRef" />
@@ -291,7 +333,7 @@ onMounted(async () => {
         <NTag type="info" round>{{ platformLabel }}</NTag>
       </NFormItem>
       <NFormItem :label="t('preferences.appearance')">
-        <NSelect v-model:value="form.theme" :options="themeOptions" style="width: 200px;" />
+        <NSelect v-model:value="form.theme" :options="themeOptions" style="width: 200px" />
       </NFormItem>
       <NFormItem :label="t('preferences.auto-hide-window')">
         <NSwitch v-model:value="form.autoHideWindow" />
@@ -308,7 +350,7 @@ onMounted(async () => {
 
       <NDivider title-placement="left">Language</NDivider>
       <NFormItem label="Select Language">
-        <NSelect v-model:value="form.locale" :options="localeOptions" style="width: 200px;" />
+        <NSelect v-model:value="form.locale" :options="localeOptions" style="width: 200px" />
       </NFormItem>
 
       <NDivider title-placement="left">{{ t('preferences.startup') }}</NDivider>
@@ -323,8 +365,8 @@ onMounted(async () => {
       <NDivider title-placement="left">{{ t('preferences.default-dir') }}</NDivider>
       <NFormItem :label="t('preferences.default-dir')">
         <NInputGroup>
-          <NInput v-model:value="form.dir" style="flex: 1;" />
-          <NButton @click="handleSelectDir" style="padding: 0 12px;">
+          <NInput v-model:value="form.dir" style="flex: 1" />
+          <NButton style="padding: 0 12px" @click="handleSelectDir">
             <template #icon>
               <NIcon :size="16"><FolderOpenOutline /></NIcon>
             </template>
@@ -337,15 +379,17 @@ onMounted(async () => {
         <NInputGroup>
           <NInputNumber
             :value="uploadSpeedValue"
+            :min="0"
+            :max="65535"
+            :step="1"
+            style="width: 140px"
             @update:value="handleUploadValueChange"
-            :min="0" :max="65535" :step="1"
-            style="width: 140px;"
           />
           <NSelect
             :value="uploadUnit"
-            @update:value="handleUploadUnitChange"
             :options="speedUnitOptions"
-            style="width: 100px;"
+            style="width: 100px"
+            @update:value="handleUploadUnitChange"
           />
         </NInputGroup>
       </NFormItem>
@@ -353,15 +397,17 @@ onMounted(async () => {
         <NInputGroup>
           <NInputNumber
             :value="downloadSpeedValue"
+            :min="0"
+            :max="65535"
+            :step="1"
+            style="width: 140px"
             @update:value="handleDownloadValueChange"
-            :min="0" :max="65535" :step="1"
-            style="width: 140px;"
           />
           <NSelect
             :value="downloadUnit"
-            @update:value="handleDownloadUnitChange"
             :options="speedUnitOptions"
-            style="width: 100px;"
+            style="width: 100px"
+            @update:value="handleDownloadUnitChange"
           />
         </NInputGroup>
       </NFormItem>
@@ -370,7 +416,9 @@ onMounted(async () => {
       <NFormItem :show-label="false">
         <NSpace vertical>
           <NCheckbox v-model:checked="form.btSaveMetadata">{{ t('preferences.bt-save-metadata') }}</NCheckbox>
-          <NCheckbox v-model:checked="form.btAutoDownloadContent">{{ t('preferences.bt-auto-download-content') }}</NCheckbox>
+          <NCheckbox v-model:checked="form.btAutoDownloadContent">
+            {{ t('preferences.bt-auto-download-content') }}
+          </NCheckbox>
           <NCheckbox v-model:checked="form.btForceEncryption">{{ t('preferences.bt-force-encryption') }}</NCheckbox>
         </NSpace>
       </NFormItem>
@@ -379,35 +427,34 @@ onMounted(async () => {
       </NFormItem>
       <template v-if="!form.keepSeeding">
         <NFormItem :label="t('preferences.seed-ratio')">
-          <NInputNumber v-model:value="form.seedRatio" :min="1" :max="100" :step="0.1" style="width: 120px;" />
+          <NInputNumber v-model:value="form.seedRatio" :min="1" :max="100" :step="0.1" style="width: 120px" />
         </NFormItem>
         <NFormItem :label="t('preferences.seed-time') + ' (' + t('preferences.seed-time-unit') + ')'">
-          <NInputNumber v-model:value="form.seedTime" :min="60" :max="525600" style="width: 120px;" />
+          <NInputNumber v-model:value="form.seedTime" :min="60" :max="525600" style="width: 120px" />
         </NFormItem>
       </template>
 
       <NDivider title-placement="left">{{ t('preferences.task-manage') }}</NDivider>
       <NFormItem :label="t('preferences.max-concurrent-downloads')">
-        <NInputNumber v-model:value="form.maxConcurrentDownloads" :min="1" :max="10" style="width: 120px;" />
+        <NInputNumber v-model:value="form.maxConcurrentDownloads" :min="1" :max="10" style="width: 120px" />
       </NFormItem>
       <NFormItem :label="t('preferences.max-connection-per-server')">
-        <NInputNumber v-model:value="form.maxConnectionPerServer" :min="1" :max="64" style="width: 120px;" />
+        <NInputNumber v-model:value="form.maxConnectionPerServer" :min="1" :max="64" style="width: 120px" />
       </NFormItem>
       <NFormItem :show-label="false">
         <NSpace vertical>
           <NCheckbox v-model:checked="form.continue">{{ t('preferences.continue') }}</NCheckbox>
-          <NCheckbox v-model:checked="form.newTaskShowDownloading">{{ t('preferences.new-task-show-downloading') }}</NCheckbox>
+          <NCheckbox v-model:checked="form.newTaskShowDownloading">
+            {{ t('preferences.new-task-show-downloading') }}
+          </NCheckbox>
           <NCheckbox v-model:checked="form.taskNotification">{{ t('preferences.task-completed-notify') }}</NCheckbox>
-          <NCheckbox v-model:checked="form.noConfirmBeforeDeleteTask">{{ t('preferences.no-confirm-before-delete-task') }}</NCheckbox>
+          <NCheckbox v-model:checked="form.noConfirmBeforeDeleteTask">
+            {{ t('preferences.no-confirm-before-delete-task') }}
+          </NCheckbox>
         </NSpace>
       </NFormItem>
     </NForm>
-    <div class="form-actions">
-      <NSpace>
-        <NButton :class="{ 'save-btn-dirty': isDirty }" type="primary" @click="handleSave">{{ t('preferences.save') }}</NButton>
-        <NButton :class="{ 'discard-btn-dirty': isDirty }" @click="handleReset">{{ t('preferences.discard') }}</NButton>
-      </NSpace>
-    </div>
+    <PreferenceActionBar :is-dirty="isDirty" @save="handleSave" @discard="handleReset" />
   </div>
 </template>
 
@@ -433,26 +480,5 @@ onMounted(async () => {
   bottom: 0;
   z-index: 10;
   padding: 16px 24px 16px 40px;
-}
-.save-btn-dirty {
-  background-color: #18a058 !important;
-  transition: background-color 0.35s cubic-bezier(0.2, 0, 0, 1);
-}
-.save-btn-dirty :deep(.n-button__border) {
-  border-color: rgba(255, 255, 255, 0.15) !important;
-}
-.save-btn-dirty :deep(.n-button__state-border) {
-  border-color: rgba(255, 255, 255, 0.15) !important;
-}
-.discard-btn-dirty {
-  background-color: rgba(208, 48, 80, 0.85) !important;
-  color: #fff !important;
-  transition: background-color 0.35s cubic-bezier(0.2, 0, 0, 1), color 0.35s cubic-bezier(0.2, 0, 0, 1);
-}
-.discard-btn-dirty :deep(.n-button__border) {
-  border-color: rgba(255, 255, 255, 0.15) !important;
-}
-.discard-btn-dirty :deep(.n-button__state-border) {
-  border-color: rgba(255, 255, 255, 0.15) !important;
 }
 </style>

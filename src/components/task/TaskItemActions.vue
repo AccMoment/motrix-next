@@ -1,24 +1,43 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+/** @fileoverview Action buttons for individual task items. */
+import { computed, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { TASK_STATUS } from '@shared/constants'
 import { NIcon, NTooltip } from 'naive-ui'
 import {
-  PauseOutline, PlayOutline, StopOutline, RefreshOutline,
-  CloseOutline, TrashOutline, LinkOutline, InformationCircleOutline,
-  FolderOpenOutline
+  PauseOutline,
+  PlayOutline,
+  StopOutline,
+  RefreshOutline,
+  CloseOutline,
+  TrashOutline,
+  LinkOutline,
+  InformationCircleOutline,
+  FolderOpenOutline,
+  SyncOutline,
 } from '@vicons/ionicons5'
 import { type Component } from 'vue'
+import type { Aria2Task } from '@shared/types'
 
-const props = defineProps<{ task: Record<string, unknown>; status: string }>()
+const props = defineProps<{ task: Aria2Task; status: string }>()
+const stoppingGids = inject<Ref<string[]>>('stoppingGids')
+const isStopping = computed(() => stoppingGids?.value.includes(props.task.gid) ?? false)
 const emit = defineEmits<{
-  pause: []; resume: []; delete: []; 'delete-record': [];
-  'copy-link': []; 'show-info': []; folder: []; 'stop-seeding': []
+  pause: []
+  resume: []
+  delete: []
+  'delete-record': []
+  'copy-link': []
+  'show-info': []
+  folder: []
+  'stop-seeding': []
 }>()
 
 const { t } = useI18n()
 
-const actionsMap = computed<Record<string, { key: string; icon: Component; label: string; event: string; tooltip?: string; cls?: string }[]>>(() => ({
+const actionsMap = computed<
+  Record<string, { key: string; icon: Component; label: string; event: string; tooltip?: string; cls?: string }[]>
+>(() => ({
   [TASK_STATUS.ACTIVE]: [
     { key: 'pause', icon: PauseOutline, label: t('task.pause-task'), event: 'pause' },
     { key: 'delete', icon: CloseOutline, label: t('task.delete-task'), event: 'delete' },
@@ -44,7 +63,16 @@ const actionsMap = computed<Record<string, { key: string; icon: Component; label
     { key: 'trash', icon: TrashOutline, label: t('task.remove-record'), event: 'delete-record' },
   ],
   [TASK_STATUS.SEEDING]: [
-    { key: 'stop', icon: StopOutline, label: t('task.stop-seeding') || 'Stop Seeding', event: 'stop-seeding', tooltip: t('task.stop-seeding-tip') || 'Download complete. You are sharing this file with others via BT. Click to stop seeding.', cls: 'stop-seeding' },
+    {
+      key: 'stop',
+      icon: StopOutline,
+      label: t('task.stop-seeding') || 'Stop Seeding',
+      event: 'stop-seeding',
+      tooltip:
+        t('task.stop-seeding-tip') ||
+        'Download complete. You are sharing this file with others via BT. Click to stop seeding.',
+      cls: 'stop-seeding',
+    },
     { key: 'delete', icon: CloseOutline, label: t('task.delete-task'), event: 'delete' },
   ],
 }))
@@ -61,14 +89,30 @@ const actions = computed(() => {
 
 function onAction(event: string) {
   switch (event) {
-    case 'pause': emit('pause'); break
-    case 'resume': emit('resume'); break
-    case 'delete': emit('delete'); break
-    case 'delete-record': emit('delete-record'); break
-    case 'copy-link': emit('copy-link'); break
-    case 'show-info': emit('show-info'); break
-    case 'folder': emit('folder'); break
-    case 'stop-seeding': emit('stop-seeding'); break
+    case 'pause':
+      emit('pause')
+      break
+    case 'resume':
+      emit('resume')
+      break
+    case 'delete':
+      emit('delete')
+      break
+    case 'delete-record':
+      emit('delete-record')
+      break
+    case 'copy-link':
+      emit('copy-link')
+      break
+    case 'show-info':
+      emit('show-info')
+      break
+    case 'folder':
+      emit('folder')
+      break
+    case 'stop-seeding':
+      emit('stop-seeding')
+      break
   }
 }
 </script>
@@ -79,14 +123,27 @@ function onAction(event: string) {
       v-for="action in actions"
       :key="action.key"
       class="task-item-action"
-      :class="action.cls"
+      :class="[action.cls, { 'is-stopping': action.event === 'stop-seeding' && isStopping }]"
       @click.stop="onAction(action.event)"
     >
       <NTooltip :delay="500" :style="action.tooltip ? 'max-width: 220px' : ''">
         <template #trigger>
-          <NIcon :size="20"><component :is="action.icon" /></NIcon>
+          <span v-if="action.event === 'stop-seeding'" class="stop-icon-wrapper">
+            <span class="stop-icon-static" :class="{ 'fade-out': isStopping }">
+              <NIcon :size="20"><StopOutline /></NIcon>
+            </span>
+            <span class="stop-icon-spin" :class="{ 'fade-in': isStopping }">
+              <NIcon :size="20"><SyncOutline /></NIcon>
+            </span>
+          </span>
+          <NIcon v-else :size="20"><component :is="action.icon" /></NIcon>
         </template>
-        {{ action.tooltip || action.label }}
+        <template v-if="action.event === 'stop-seeding' && isStopping">
+          {{ t('task.stopping-seeding') || 'Stopping…' }}
+        </template>
+        <template v-else>
+          {{ action.tooltip || action.label }}
+        </template>
       </NTooltip>
     </li>
   </ul>
@@ -109,7 +166,7 @@ function onAction(event: string) {
   color: var(--task-action-color);
   background-color: var(--task-action-bg);
   border-radius: 18px;
-  transition: all .2s cubic-bezier(0.2, 0, 0, 1);
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
   list-style: none;
 }
 .task-item-actions:hover {
@@ -126,15 +183,61 @@ function onAction(event: string) {
   line-height: 20px;
   direction: ltr;
   border-radius: 50%;
-  transition: color .15s, background-color .15s;
+  transition:
+    color 0.15s,
+    background-color 0.15s;
 }
 .task-item-action:hover {
-  color: var(--primary-color, #E0A422);
+  color: var(--primary-color, #e0a422);
 }
 .task-item-action.stop-seeding {
-  color: #67C23A;
+  color: #67c23a;
 }
 .task-item-action.stop-seeding:hover {
   color: #85ce61;
+}
+.task-item-action.is-stopping {
+  color: #e6a23c;
+  pointer-events: none;
+}
+
+/* Icon crossfade wrapper */
+.stop-icon-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+.stop-icon-static,
+.stop-icon-spin {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.5s ease;
+}
+.stop-icon-static {
+  opacity: 1;
+}
+.stop-icon-static.fade-out {
+  opacity: 0;
+}
+.stop-icon-spin {
+  opacity: 0;
+}
+.stop-icon-spin.fade-in {
+  opacity: 1;
+  animation: spin-stop 0.9s linear infinite;
+}
+@keyframes spin-stop {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { computed, watch, onMounted, onBeforeUnmount, ref, h } from 'vue'
+/** @fileoverview Task list view with polling, task actions, and file delete confirmation. */
+import { computed, watch, onMounted, onBeforeUnmount, ref, h, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTaskStore } from '@/stores/task'
 import { useAppStore } from '@/stores/app'
 import { usePreferenceStore } from '@/stores/preference'
 import { getTaskUri, getTaskName } from '@shared/utils'
-import { remove, stat } from '@tauri-apps/plugin-fs'
-import { join } from '@tauri-apps/api/path'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
-import aria2Api, { isEngineReady } from '@/api/aria2'
+import { isEngineReady } from '@/api/aria2'
+import { deleteTaskFiles } from '@/composables/useFileDelete'
+import type { Aria2Task } from '@shared/types'
+import { TASK_STATUS } from '@shared/constants'
+import { ARIA2_ERROR_CODES } from '@shared/aria2ErrorCodes'
+import { logger } from '@shared/logger'
 import { useDialog, NCheckbox } from 'naive-ui'
 import { useAppMessage } from '@/composables/useAppMessage'
 import TaskList from '@/components/task/TaskList.vue'
@@ -23,6 +27,9 @@ const appStore = useAppStore()
 const preferenceStore = usePreferenceStore()
 const dialog = useDialog()
 const message = useAppMessage()
+
+const stoppingGids = ref<string[]>([])
+provide('stoppingGids', stoppingGids)
 
 const subnavs = computed(() => [
   { key: 'active', title: t('task.active') || 'Active' },
@@ -40,7 +47,7 @@ function startPolling() {
   stopPolling()
   function tick() {
     if (isEngineReady()) {
-      taskStore.fetchList().catch(() => {})
+      taskStore.fetchList().catch((e) => logger.debug('TaskView.fetchList', e))
     }
     refreshTimer = setTimeout(tick, appStore.interval)
   }
@@ -61,108 +68,133 @@ async function changeCurrentList() {
 }
 
 watch(() => props.status, changeCurrentList)
-onMounted(changeCurrentList)
+onMounted(() => {
+  changeCurrentList()
+  taskStore.setOnTaskError((task) => {
+    if (preferenceStore.config?.taskNotification === false) return
+    const i18nKey = task.errorCode ? ARIA2_ERROR_CODES[task.errorCode] : undefined
+    const taskName = getTaskName(task, { defaultName: 'Unknown', maxLen: 40 })
+    const errorText = i18nKey ? t(i18nKey) : task.errorMessage || t('task.error-unknown')
+    message.error(`${taskName}: ${errorText}`, { duration: 8000, closable: true })
+  })
+})
 onBeforeUnmount(stopPolling)
 
-async function deleteTaskFiles(task: Record<string, unknown>) {
-  const dir = task.dir as string
-  const files = (task.files || []) as { path: string }[]
-  const parentDirs = new Set<string>()
-
-  for (const f of files) {
-    if (!f.path) continue
-    try { await remove(f.path) } catch {}
-    try { await remove(f.path + '.aria2') } catch {}
-    const lastSep = Math.max(f.path.lastIndexOf('/'), f.path.lastIndexOf('\\'))
-    if (lastSep > 0) {
-      const parent = f.path.substring(0, lastSep)
-      if (parent !== dir) parentDirs.add(parent)
-    }
-  }
-
-  for (const pd of parentDirs) {
-    try { await remove(pd, { recursive: true }) } catch {}
-  }
-
-  if (dir) {
-    const taskName = getTaskName(task as never, { defaultName: '', maxLen: -1 })
-    if (taskName) {
-      const taskDir = await join(dir, taskName)
-      try { await remove(taskDir, { recursive: true }) } catch {}
-    }
+// File deletion handled by @/composables/useFileDelete
+function handlePauseTask(task: Aria2Task) {
+  const taskName = getTaskName(task, { defaultName: 'Unknown', maxLen: 40 })
+  taskStore
+    .pauseTask(task)
+    .then(() => message.success(t('task.pause-task-success', { taskName })))
+    .catch(() => message.error(t('task.pause-task-fail', { taskName })))
+}
+function handleResumeTask(task: Aria2Task) {
+  const taskName = getTaskName(task, { defaultName: 'Unknown', maxLen: 40 })
+  const { COMPLETE, ERROR, REMOVED } = TASK_STATUS
+  if (task.status === ERROR || task.status === COMPLETE || task.status === REMOVED) {
+    // Stopped tasks cannot be unpause'd — restart by re-adding the URI
+    taskStore
+      .restartTask(task)
+      .then(() => message.success(t('task.resume-task-success', { taskName })))
+      .catch(() => message.error(t('task.resume-task-fail', { taskName })))
+  } else {
+    taskStore
+      .resumeTask(task)
+      .then(() => message.success(t('task.resume-task-success', { taskName })))
+      .catch(() => message.error(t('task.resume-task-fail', { taskName })))
   }
 }
-function handlePauseTask(task: Record<string, unknown>) {
-  taskStore.pauseTask(task as never).catch(console.error)
-}
-function handleResumeTask(task: Record<string, unknown>) {
-  taskStore.resumeTask(task as never).catch(console.error)
-}
-function handleDeleteTask(task: Record<string, unknown>) {
+function handleDeleteTask(task: Aria2Task) {
   const noConfirm = preferenceStore.config?.noConfirmBeforeDeleteTask
   if (noConfirm) {
-    taskStore.removeTask(task as never).catch(console.error)
+    taskStore.removeTask(task).catch(console.error)
     return
   }
   const deleteFiles = ref(false)
-  const name = getTaskName(task as never, { defaultName: 'Unknown', maxLen: 50 })
+  const name = getTaskName(task, { defaultName: 'Unknown', maxLen: 50 })
   const d = dialog.warning({
     title: t('task.delete-task'),
-    content: () => h('div', {}, [
-      h('p', { style: 'margin: 0 0 12px; word-break: break-all;' }, name),
-      h(NCheckbox, {
-        checked: deleteFiles.value,
-        'onUpdate:checked': (v: boolean) => { deleteFiles.value = v },
-      }, { default: () => t('task.delete-task-label') }),
-    ]),
+    content: () =>
+      h('div', {}, [
+        h('p', { style: 'margin: 0 0 12px; word-break: break-all;' }, name),
+        h(
+          NCheckbox,
+          {
+            checked: deleteFiles.value,
+            'onUpdate:checked': (v: boolean) => {
+              deleteFiles.value = v
+            },
+          },
+          { default: () => t('task.delete-task-label') },
+        ),
+      ]),
     positiveText: t('app.yes'),
     negativeText: t('app.no'),
     onPositiveClick: async () => {
       d.loading = true
-      d.negativeButtonProps = { disabled: true } as never
+      d.negativeButtonProps = { disabled: true }
       d.closable = false
       d.maskClosable = false
       // Yield to browser so the loading spinner renders before heavy IPC work
-      await new Promise(r => setTimeout(r, 50))
+      await new Promise((r) => setTimeout(r, 50))
       try {
-        await taskStore.removeTask(task as never)
+        await taskStore.removeTask(task)
         if (deleteFiles.value) {
           await deleteTaskFiles(task)
         }
+        message.success(t('task.delete-task-success', { taskName: name }))
       } catch (e) {
-        console.error('Delete failed:', e)
+        logger.error('TaskView.deleteTask', e)
+        message.error(t('task.delete-task-fail', { taskName: name }))
       }
     },
   })
 }
-function handleDeleteRecord(task: Record<string, unknown>) {
-  taskStore.removeTaskRecord(task as never).catch(console.error)
+function handleDeleteRecord(task: Aria2Task) {
+  const taskName = getTaskName(task, { defaultName: 'Unknown', maxLen: 40 })
+  taskStore
+    .removeTaskRecord(task)
+    .then(() => message.success(t('task.remove-record-success', { taskName })))
+    .catch(() => message.error(t('task.remove-record-fail', { taskName })))
 }
-function handleCopyLink(task: Record<string, unknown>) {
-  navigator.clipboard.writeText(getTaskUri(task as never))
+function handleCopyLink(task: Aria2Task) {
+  navigator.clipboard.writeText(getTaskUri(task))
+  message.success(t('task.copy-link-success'))
 }
-function handleShowInfo(task: Record<string, unknown>) {
-  taskStore.showTaskDetail(task as never)
+function handleShowInfo(task: Aria2Task) {
+  taskStore.showTaskDetail(task)
 }
-async function handleShowInFolder(task: Record<string, unknown>) {
-  const files = (task.files || []) as { path: string }[]
+async function handleShowInFolder(task: Aria2Task) {
+  const files = task.files || []
   const filePath = files[0]?.path
   if (!filePath) return
   try {
     await revealItemInDir(filePath)
-  } catch {
+  } catch (e) {
+    logger.debug('TaskView.openFile', e)
     message.warning(t('task.file-not-exist'))
   }
 }
-function handleStopSeeding(task: Record<string, unknown>) {
-  taskStore.removeTask(task as never).catch(console.error)
+async function handleStopSeeding(task: Aria2Task) {
+  if (stoppingGids.value.includes(task.gid)) return // prevent double-click
+  stoppingGids.value = [...stoppingGids.value, task.gid]
+  message.info(t('task.bt-stopping-seeding-tip'), { duration: 5000, closable: true })
+  try {
+    await taskStore.stopSeeding(task.gid)
+    // Don't remove from stoppingGids — let the spinner run
+    // until the task transitions to 'complete' and vanishes from the list
+  } catch (e) {
+    console.error(e)
+    // Only clear on error so user can retry
+    stoppingGids.value = stoppingGids.value.filter((g) => g !== task.gid)
+  }
 }
 </script>
 
 <template>
   <div class="task-view">
     <header class="panel-header" data-tauri-drag-region>
-      <h4 class="task-title" :key="status">{{ title }}</h4>
+      <h4 :key="status" class="task-title">{{ title }}</h4>
       <TaskActions />
     </header>
     <div class="panel-content">

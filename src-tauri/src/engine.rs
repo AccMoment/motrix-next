@@ -3,6 +3,7 @@ use tauri::Manager;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+/// Holds the aria2c child process handle, protected by a Mutex for thread-safe access.
 pub struct EngineState {
     child: Mutex<Option<CommandChild>>,
 }
@@ -15,6 +16,9 @@ impl EngineState {
     }
 }
 
+/// Spawns the aria2c engine process with the given configuration.
+/// Creates the download directory, cleans up stale port listeners, and passes
+/// whitelisted config keys as CLI arguments.
 pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Result<(), String> {
     let state = app.state::<EngineState>();
     let mut child_lock = state.child.lock().map_err(|e| e.to_string())?;
@@ -25,7 +29,8 @@ pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Resul
 
     // Ensure the download directory exists
     if let Some(dir) = config.get("dir").and_then(|v| v.as_str()) {
-        let _ = std::fs::create_dir_all(dir);
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("Failed to create download directory '{}': {}", dir, e))?;
     }
 
     // Kill any leftover aria2c process on the RPC port before starting
@@ -98,6 +103,7 @@ pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Resul
     Ok(())
 }
 
+/// Kills the running aria2c child process and releases the lock.
 pub fn stop_engine(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<EngineState>();
     let mut child_lock = state.child.lock().map_err(|e| e.to_string())?;
@@ -111,6 +117,7 @@ pub fn stop_engine(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Stops the current engine (if running) and starts a new one with fresh config.
 pub fn restart_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Result<(), String> {
     stop_engine(app)?;
     start_engine(app, config)
@@ -256,9 +263,14 @@ fn build_start_args(
     ];
 
     // Check keep-seeding flag (app-level logic, not aria2c option)
+    // Frontend sends String("true"/"false"), so handle both Bool and String
     let keep_seeding = config
         .get("keep-seeding")
-        .and_then(|v| v.as_bool())
+        .map(|v| match v {
+            serde_json::Value::Bool(b) => *b,
+            serde_json::Value::String(s) => s == "true",
+            _ => false,
+        })
         .unwrap_or(false);
 
     if let Some(obj) = config.as_object() {
@@ -312,7 +324,8 @@ fn build_start_args(
     args
 }
 
-/// Kill any process occupying the given port, so aria2c can bind to it.
+/// Kill only aria2c processes occupying the given port, so a new aria2c can bind to it.
+/// Non-aria2c processes on the same port are left untouched to prevent accidental kills.
 fn cleanup_port(port: &str) {
     #[cfg(unix)]
     {
@@ -324,13 +337,34 @@ fn cleanup_port(port: &str) {
             let pids = String::from_utf8_lossy(&out.stdout);
             let pids = pids.trim();
             if !pids.is_empty() {
-                eprintln!(
-                    "[aria2c] killing leftover process on port {}: PIDs {}",
-                    port, pids
-                );
-                let _ = std::process::Command::new("sh")
-                    .args(["-c", &format!("kill -9 {} 2>/dev/null", pids)])
-                    .status();
+                for pid in pids.lines() {
+                    let pid = pid.trim();
+                    if pid.is_empty() {
+                        continue;
+                    }
+                    // Verify the process is aria2c before killing
+                    let check = std::process::Command::new("sh")
+                        .args(["-c", &format!("ps -p {} -o comm= 2>/dev/null", pid)])
+                        .output();
+                    if let Ok(check_out) = check {
+                        let comm = String::from_utf8_lossy(&check_out.stdout);
+                        let comm = comm.trim();
+                        if comm.contains("aria2c") {
+                            eprintln!(
+                                "[aria2c] killing leftover aria2c process on port {}: PID {}",
+                                port, pid
+                            );
+                            let _ = std::process::Command::new("sh")
+                                .args(["-c", &format!("kill -9 {} 2>/dev/null", pid)])
+                                .status();
+                        } else {
+                            eprintln!(
+                                "[aria2c] port {} occupied by non-aria2c process '{}' (PID {}), skipping",
+                                port, comm, pid
+                            );
+                        }
+                    }
+                }
                 // Brief wait for OS to release the port
                 std::thread::sleep(std::time::Duration::from_millis(300));
             }
@@ -348,17 +382,126 @@ fn cleanup_port(port: &str) {
             for line in text.lines() {
                 if let Some(pid) = line.split_whitespace().last() {
                     if pid.parse::<u32>().is_ok() {
-                        eprintln!(
-                            "[aria2c] killing leftover process on port {}: PID {}",
-                            port, pid
-                        );
-                        let _ = std::process::Command::new("taskkill")
-                            .args(["/F", "/PID", pid])
-                            .status();
+                        // Verify the process is aria2c before killing
+                        let check = std::process::Command::new("cmd")
+                            .args([
+                                "/C",
+                                &format!("tasklist /FI \"PID eq {}\" /NH /FO CSV 2>NUL", pid),
+                            ])
+                            .output();
+                        let is_aria2c = check
+                            .map(|o| {
+                                let s = String::from_utf8_lossy(&o.stdout);
+                                s.to_lowercase().contains("aria2c")
+                            })
+                            .unwrap_or(false);
+                        if is_aria2c {
+                            eprintln!(
+                                "[aria2c] killing leftover aria2c process on port {}: PID {}",
+                                port, pid
+                            );
+                            let _ = std::process::Command::new("taskkill")
+                                .args(["/F", "/PID", pid])
+                                .status();
+                        } else {
+                            eprintln!(
+                                "[aria2c] port {} occupied by non-aria2c process (PID {}), skipping",
+                                port, pid
+                            );
+                        }
                     }
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn build_args_passes_whitelisted_keys() {
+        let config = json!({ "dir": "/tmp", "split": 16 });
+        let args = build_start_args(&config, None, "/tmp/s.session", false);
+        assert!(args.iter().any(|a| a == "--dir=/tmp"));
+        assert!(args.iter().any(|a| a == "--split=16"));
+    }
+
+    #[test]
+    fn build_args_rejects_non_whitelisted_keys() {
+        let config = json!({ "dir": "/tmp", "not-a-real-key": "value", "keep-seeding": true });
+        let args = build_start_args(&config, None, "/tmp/s.session", false);
+        assert!(!args.iter().any(|a| a.contains("not-a-real-key")));
+        assert!(!args.iter().any(|a| a.contains("keep-seeding")));
+    }
+
+    #[test]
+    fn build_args_forces_rpc_listen_all_false() {
+        let config = json!({ "rpc-listen-all": "true" });
+        let args = build_start_args(&config, None, "/tmp/s.session", false);
+        // Must NOT pass the user's rpc-listen-all=true
+        let rpc_args: Vec<_> = args
+            .iter()
+            .filter(|a| a.contains("rpc-listen-all"))
+            .collect();
+        assert_eq!(rpc_args.len(), 1);
+        assert_eq!(rpc_args[0], "--rpc-listen-all=false");
+    }
+
+    #[test]
+    fn build_args_keep_seeding_skips_seed_time() {
+        let config = json!({ "keep-seeding": true, "seed-time": "60" });
+        let args = build_start_args(&config, None, "/tmp/s.session", false);
+        assert!(!args.iter().any(|a| a.contains("seed-time")));
+    }
+
+    #[test]
+    fn build_args_keep_seeding_overrides_seed_ratio() {
+        let config = json!({ "keep-seeding": true, "seed-ratio": "1.0" });
+        let args = build_start_args(&config, None, "/tmp/s.session", false);
+        assert!(args.iter().any(|a| a == "--seed-ratio=0"));
+    }
+
+    #[test]
+    fn build_args_skips_empty_values() {
+        let config = json!({ "dir": "" });
+        let args = build_start_args(&config, None, "/tmp/s.session", false);
+        assert!(!args.iter().any(|a| a.contains("--dir=")));
+    }
+
+    #[test]
+    fn build_args_loads_session_on_exists() {
+        let args = build_start_args(&json!({}), None, "/tmp/s.session", true);
+        assert!(args.iter().any(|a| a == "--input-file=/tmp/s.session"));
+        assert!(args.iter().any(|a| a == "--save-session=/tmp/s.session"));
+    }
+
+    #[test]
+    fn build_args_no_input_file_when_no_session() {
+        let args = build_start_args(&json!({}), None, "/tmp/s.session", false);
+        assert!(!args.iter().any(|a| a.contains("input-file")));
+        assert!(args.iter().any(|a| a == "--save-session=/tmp/s.session"));
+    }
+
+    #[test]
+    fn build_args_includes_conf_path() {
+        let args = build_start_args(&json!({}), Some("/etc/aria2.conf"), "/tmp/s.session", false);
+        assert!(args.iter().any(|a| a == "--conf-path=/etc/aria2.conf"));
+    }
+
+    #[test]
+    fn build_args_enables_rpc_without_conf() {
+        let args = build_start_args(&json!({}), None, "/tmp/s.session", false);
+        assert!(args.iter().any(|a| a == "--enable-rpc=true"));
+        assert!(args.iter().any(|a| a == "--rpc-allow-origin-all=true"));
+    }
+
+    #[test]
+    fn build_args_no_rpc_enable_with_conf() {
+        let args = build_start_args(&json!({}), Some("/etc/aria2.conf"), "/tmp/s.session", false);
+        assert!(!args.iter().any(|a| a.contains("enable-rpc")));
     }
 }

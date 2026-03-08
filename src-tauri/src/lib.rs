@@ -1,5 +1,6 @@
 mod commands;
 mod engine;
+mod error;
 mod menu;
 mod tray;
 
@@ -55,6 +56,8 @@ pub fn run() {
             commands::update_menu_labels,
             commands::update_progress_bar,
             commands::update_dock_badge,
+            commands::check_for_update,
+            commands::install_update,
         ])
         .setup(|app| {
             let handle = app.handle();

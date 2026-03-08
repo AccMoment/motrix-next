@@ -1,19 +1,23 @@
 <script setup lang="ts">
+/** @fileoverview Visual bitfield progress graphic for download pieces. */
 import { computed, ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 
-const props = withDefaults(defineProps<{
-  bitfield: string
-  atomWidth?: number
-  atomHeight?: number
-  atomGutter?: number
-  atomRadius?: number
-}>(), {
-  bitfield: '',
-  atomWidth: 8,
-  atomHeight: 8,
-  atomGutter: 2,
-  atomRadius: 1.5,
-})
+const props = withDefaults(
+  defineProps<{
+    bitfield?: string
+    atomWidth?: number
+    atomHeight?: number
+    atomGutter?: number
+    atomRadius?: number
+  }>(),
+  {
+    bitfield: '',
+    atomWidth: 8,
+    atomHeight: 8,
+    atomGutter: 2,
+    atomRadius: 1.5,
+  },
+)
 
 const container = ref<HTMLElement>()
 const canvas = ref<HTMLCanvasElement>()
@@ -34,7 +38,9 @@ onMounted(() => {
     ro.observe(container.value)
   }
 })
-onBeforeUnmount(() => { ro?.disconnect() })
+onBeforeUnmount(() => {
+  ro?.disconnect()
+})
 
 const len = computed(() => props.bitfield.length)
 const atomWG = computed(() => props.atomWidth + props.atomGutter)
@@ -131,18 +137,17 @@ function draw() {
   prevStatus.value = newStatus
 }
 
-watch(() => props.bitfield, () => nextTick(draw))
+watch(
+  () => props.bitfield,
+  () => nextTick(draw),
+)
 watch([canvasWidth, canvasHeight], () => nextTick(draw))
 onMounted(() => nextTick(draw))
 </script>
 
 <template>
   <div ref="container" class="task-graphic-container">
-    <canvas
-      v-if="bitfield"
-      ref="canvas"
-      class="task-graphic"
-    />
+    <canvas v-if="bitfield" ref="canvas" class="task-graphic" />
     <div v-else class="no-bitfield">No piece data</div>
   </div>
 </template>
