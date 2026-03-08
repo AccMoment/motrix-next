@@ -108,12 +108,17 @@ onMounted(async () => {
           content: t('preferences.not-saved-confirm'),
           positiveText: t('preferences.save-and-leave'),
           negativeText: t('preferences.leave-without-saving'),
-          onPositiveClick: () => {
-            if (preferenceStore.saveBeforeLeave) {
-              preferenceStore.saveBeforeLeave()
+          onPositiveClick: async () => {
+            try {
+              if (preferenceStore.saveBeforeLeave) {
+                await preferenceStore.saveBeforeLeave()
+              }
+              preferenceStore.pendingChanges = false
+              resolve(true)
+            } catch (e) {
+              console.error('Save before leave failed:', e)
+              resolve(false)
             }
-            preferenceStore.pendingChanges = false
-            resolve(true)
           },
           onNegativeClick: () => {
             preferenceStore.pendingChanges = false

@@ -40,6 +40,7 @@ pub fn run() {
     }
 
     builder = builder.plugin(tauri_plugin_deep_link::init());
+    builder = builder.plugin(tauri_plugin_window_state::Builder::new().build());
 
     builder
         .manage(EngineState::new())

@@ -69,7 +69,7 @@ export function usePreferenceForm<T extends Record<string, unknown>>(options: Us
 
   // ── Save & Reset ────────────────────────────────────────────────────
 
-  function handleSave(): void {
+  async function handleSave(): Promise<void> {
     if (options.beforeSave && !options.beforeSave(form.value as T)) {
       return
     }
@@ -84,11 +84,11 @@ export function usePreferenceForm<T extends Record<string, unknown>>(options: Us
       ? options.transformForStore(form.value as T)
       : { ...(form.value as T) }
 
-    preferenceStore.updateAndSave(storeData)
+    await preferenceStore.updateAndSave(storeData)
 
     const systemConfig = options.buildSystemConfig(form.value as T)
     if (Object.keys(systemConfig).length > 0) {
-      invoke('save_system_config', { config: systemConfig }).catch(console.error)
+      await invoke('save_system_config', { config: systemConfig })
     }
 
     message.success(t('preferences.save-success-message'))
