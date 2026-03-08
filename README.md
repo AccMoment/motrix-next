@@ -18,7 +18,13 @@
 ---
 
 <div align="center">
-  <img src="docs/media/screenshot-downloading.png" alt="Motrix Next Downloading Interface" width="720" />
+  <table><tr>
+    <td><img src="docs/media/screenshot-light.png" alt="Light Mode" width="400" /></td>
+    <td><img src="docs/media/screenshot-dark.png" alt="Dark Mode" width="400" /></td>
+  </tr><tr>
+    <td align="center"><sub>Light Mode</sub></td>
+    <td align="center"><sub>Dark Mode</sub></td>
+  </tr></table>
 </div>
 
 ## Why Motrix Next?
