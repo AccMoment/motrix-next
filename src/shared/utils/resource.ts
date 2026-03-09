@@ -19,9 +19,29 @@ export const splitTaskLinks = (links = ''): string[] => {
   return temp.map((item) => decodeThunderLink(item))
 }
 
-/** Returns true if the content string contains any recognized download protocol tag. */
+/**
+ * Returns true if the clipboard content represents downloadable resource(s).
+ *
+ * Detection rules (all must hold):
+ * 1. Content length ≤ 2048 characters (long payloads are not URLs).
+ * 2. Split into lines; ignore empty/whitespace-only lines.
+ * 3. Every remaining line must start with a recognized protocol tag
+ *    (`http://`, `https://`, `ftp://`, `magnet:`, `thunder://`).
+ *
+ * This rejects embedded URLs inside prose, code comments, JSON, HTML,
+ * log lines, and mixed multi-line content.
+ */
 export const detectResource = (content: string): boolean => {
-  return RESOURCE_TAGS.some((type) => content.includes(type))
+  if (!content || content.length > 2048) return false
+
+  const lines = content
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+
+  if (lines.length === 0) return false
+
+  return lines.every((line) => RESOURCE_TAGS.some((tag) => line.startsWith(tag)))
 }
 
 export const needCheckCopyright = (links = ''): boolean => {

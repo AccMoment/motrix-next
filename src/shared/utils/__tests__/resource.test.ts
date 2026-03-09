@@ -30,21 +30,128 @@ describe('splitTaskLinks', () => {
   })
 })
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// detectResource — comprehensive TDD test suite
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 describe('detectResource', () => {
-  it('detects http links', () => {
-    expect(detectResource('http://example.com')).toBe(true)
+  // ── Valid single-line resources (should trigger) ────────────────────
+
+  describe('valid single-line resources', () => {
+    it('detects http:// URL', () => {
+      expect(detectResource('http://example.com/file.zip')).toBe(true)
+    })
+
+    it('detects https:// URL', () => {
+      expect(detectResource('https://cdn.example.com/release-v2.tar.gz')).toBe(true)
+    })
+
+    it('detects ftp:// URL', () => {
+      expect(detectResource('ftp://mirror.example.com/pub/file.iso')).toBe(true)
+    })
+
+    it('detects magnet link', () => {
+      expect(detectResource('magnet:?xt=urn:btih:abc123def456')).toBe(true)
+    })
+
+    it('detects thunder:// link', () => {
+      expect(detectResource('thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXBaWg==')).toBe(true)
+    })
+
+    it('detects URL with trailing whitespace', () => {
+      expect(detectResource('  https://example.com/file.zip  ')).toBe(true)
+    })
   })
-  it('detects magnet links', () => {
-    expect(detectResource('magnet:?xt=urn:btih:abc')).toBe(true)
+
+  // ── Valid multi-line resource lists (should trigger) ────────────────
+
+  describe('valid multi-line resource lists', () => {
+    it('detects multiple http URLs on separate lines', () => {
+      expect(detectResource('http://a.com/1.zip\nhttps://b.com/2.zip')).toBe(true)
+    })
+
+    it('detects mixed protocols on separate lines', () => {
+      const input = 'http://a.com/file.zip\nftp://b.com/file.iso\nmagnet:?xt=urn:btih:abc'
+      expect(detectResource(input)).toBe(true)
+    })
+
+    it('detects URLs with blank lines between them', () => {
+      expect(detectResource('http://a.com\n\nhttps://b.com\n\n')).toBe(true)
+    })
+
+    it('detects URLs with Windows-style line endings', () => {
+      expect(detectResource('http://a.com\r\nhttps://b.com')).toBe(true)
+    })
   })
-  it('detects ftp links', () => {
-    expect(detectResource('ftp://mirror.example.com/file.iso')).toBe(true)
+
+  // ── False positives that MUST be rejected ──────────────────────────
+
+  describe('false positives — embedded URLs in text', () => {
+    it('rejects paragraph containing a URL', () => {
+      expect(detectResource('Visit http://example.com for more info')).toBe(false)
+    })
+
+    it('rejects code comment containing URL', () => {
+      expect(detectResource('// fetch from https://api.example.com/data')).toBe(false)
+    })
+
+    it('rejects markdown with URL', () => {
+      expect(detectResource('[click here](https://example.com)')).toBe(false)
+    })
+
+    it('rejects log line containing URL', () => {
+      expect(detectResource('[INFO] Downloaded from http://cdn.example.com/v2.zip successfully')).toBe(false)
+    })
+
+    it('rejects HTML anchor tag', () => {
+      expect(detectResource('<a href="https://example.com">link</a>')).toBe(false)
+    })
   })
-  it('detects thunder links', () => {
-    expect(detectResource('thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vZmlsZS56aXBaWg==')).toBe(true)
+
+  describe('false positives — mixed content', () => {
+    it('rejects multi-line text where only some lines are URLs', () => {
+      expect(detectResource('Here is a file:\nhttp://example.com/file.zip')).toBe(false)
+    })
+
+    it('rejects URL followed by description text', () => {
+      expect(detectResource('http://example.com\nThis is my download server')).toBe(false)
+    })
+
+    it('rejects JSON containing a URL field', () => {
+      const json = '{"url": "https://example.com/api/data"}'
+      expect(detectResource(json)).toBe(false)
+    })
   })
-  it('returns false for plain text', () => {
-    expect(detectResource('hello world')).toBe(false)
+
+  describe('false positives — oversized content', () => {
+    it('rejects content exceeding 2048 characters', () => {
+      const longUrl = 'https://example.com/' + 'a'.repeat(2100)
+      expect(detectResource(longUrl)).toBe(false)
+    })
+  })
+
+  // ── Edge cases ─────────────────────────────────────────────────────
+
+  describe('edge cases', () => {
+    it('returns false for empty string', () => {
+      expect(detectResource('')).toBe(false)
+    })
+
+    it('returns false for plain text', () => {
+      expect(detectResource('hello world')).toBe(false)
+    })
+
+    it('returns false for whitespace-only string', () => {
+      expect(detectResource('   \n\n   ')).toBe(false)
+    })
+
+    it('returns false for random protocol-like strings', () => {
+      expect(detectResource('myapp://open?id=123')).toBe(false)
+    })
+
+    it('returns false for email addresses', () => {
+      expect(detectResource('user@http://example.com')).toBe(false)
+    })
   })
 })
 
