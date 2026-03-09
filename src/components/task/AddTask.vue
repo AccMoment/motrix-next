@@ -263,7 +263,7 @@ async function chooseTorrentFile() {
       multiple: false,
       filters: [{ name: 'Torrent / Metalink', extensions: ['torrent', 'metalink', 'meta4'] }],
     })
-    if (typeof selected === 'string') await loadTorrentFromPath(selected)
+    if (typeof selected === 'string') await loadDroppedFile(selected)
   } catch (e) {
     logger.debug('AddTask.chooseTorrentFile', e)
   }

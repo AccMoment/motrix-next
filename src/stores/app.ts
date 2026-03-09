@@ -162,19 +162,20 @@ export const useAppStore = defineStore('app', () => {
     if (!urls || urls.length === 0) return
 
     const uriLines: string[] = []
+    const filePaths: string[] = []
 
     for (const url of urls) {
       const lower = url.toLowerCase()
       if (lower.endsWith('.torrent') || (lower.startsWith('file://') && lower.includes('.torrent'))) {
         const filePath = url.startsWith('file://') ? decodeURIComponent(url.replace(/^file:\/\//, '')) : url
-        showAddTaskDialog(ADD_TASK_TYPE.TORRENT, [filePath])
+        filePaths.push(filePath)
       } else if (
         lower.endsWith('.metalink') ||
         lower.endsWith('.meta4') ||
         (lower.startsWith('file://') && (lower.includes('.metalink') || lower.includes('.meta4')))
       ) {
         const filePath = url.startsWith('file://') ? decodeURIComponent(url.replace(/^file:\/\//, '')) : url
-        showAddTaskDialog(ADD_TASK_TYPE.TORRENT, [filePath])
+        filePaths.push(filePath)
       } else if (lower.startsWith('magnet:')) {
         uriLines.push(url)
       } else if (lower.startsWith('thunder://')) {
@@ -184,7 +185,10 @@ export const useAppStore = defineStore('app', () => {
       }
     }
 
-    if (uriLines.length > 0) {
+    // File-based inputs take priority — open dialog with all collected paths
+    if (filePaths.length > 0) {
+      showAddTaskDialog(ADD_TASK_TYPE.TORRENT, filePaths)
+    } else if (uriLines.length > 0) {
       addTaskUrl.value = uriLines.join('\n')
       showAddTaskDialog(ADD_TASK_TYPE.URI)
     }

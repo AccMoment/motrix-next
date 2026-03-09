@@ -57,8 +57,17 @@ export const usePreferenceStore = defineStore('preference', () => {
   }
 
   async function updateAndSave(cfg: Partial<AppConfig>): Promise<boolean> {
-    config.value = { ...config.value, ...cfg }
-    return savePreference()
+    const merged = { ...config.value, ...cfg }
+    try {
+      const store = await getStore()
+      await store.set(STORE_KEY, merged)
+      await store.save()
+      config.value = merged
+      return true
+    } catch (e) {
+      logger.error('PreferenceStore.updateAndSave', e)
+      return false
+    }
   }
 
   function updatePreference(cfg: Partial<AppConfig>) {
