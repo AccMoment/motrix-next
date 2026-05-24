@@ -6,7 +6,30 @@
  */
 import { ENGINE_RPC_PORT, PROXY_SCOPES, PROXY_SCOPE_OPTIONS, DEFAULT_APP_CONFIG as D } from '@shared/constants'
 import { convertCommaToLine, convertLineToComma, generateRandomInt } from '@shared/utils'
+import { isValidAria2ProxyUrl, UNSUPPORTED_PROXY_SCHEME_RE } from '@shared/utils/aria2Proxy'
 import type { AppConfig } from '@shared/types'
+
+export { isValidAria2ProxyUrl } from '@shared/utils/aria2Proxy'
+
+// ── URL Validation ──────────────────────────────────────────────────
+
+/**
+ * Validates whether a string is a valid HTTP/HTTPS URL suitable for use as a
+ * tracker source. Custom tracker sources are fetched via axios GET, so only
+ * HTTP-based protocols are accepted.
+ *
+ * Exported for unit testing and use in Advanced.vue's tracker source validation.
+ */
+export function isValidTrackerSourceUrl(input: string): boolean {
+  const trimmed = input.trim()
+  if (!trimmed) return false
+  try {
+    const url = new URL(trimmed)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -19,16 +42,42 @@ export interface AdvancedForm {
     scope: string[]
   }
   trackerSource: string[]
+  customTrackerUrls: string[]
   btTracker: string
   autoSyncTracker: boolean
   lastSyncTrackerTime: number
   rpcListenPort: number
   rpcSecret: string
+  extensionApiPort: number
+  extensionApiSecret: string
+  autoSubmitFromExtension: boolean
+  autoSelectAllFilesFromExtension: boolean
+  silentAutoSubmitFromExtension: boolean
+  autoChangeConflictingPorts: boolean
   enableUpnp: boolean
   listenPort: number
   dhtListenPort: number
   userAgent: string
   logLevel: string
+  tempFilesDir: string
+  hardwareRendering: boolean
+  // Clipboard detection (migrated from legacy Basic tab)
+  clipboardEnable: boolean
+  clipboardHttp: boolean
+  clipboardFtp: boolean
+  clipboardMagnet: boolean
+  clipboardEd2k: boolean
+  clipboardThunder: boolean
+  clipboardBtHash: boolean
+  // Protocol handlers (migrated from legacy Basic tab)
+  protocolMagnet: boolean
+  protocolEd2k: boolean
+  protocolThunder: boolean
+  protocolMotrixnext: boolean
+  // Timeout & disk (shared with Network tab but kept for backward compat)
+  connectTimeout: number
+  timeout: number
+  fileAllocation: string
 }
 
 // ── Pure Functions ──────────────────────────────────────────────────
@@ -48,13 +97,22 @@ export function generateSecret(): string {
  * All fallback values reference DEFAULT_APP_CONFIG (single source of truth).
  * If no RPC secret exists, generates one.
  */
-export function buildAdvancedForm(config: AppConfig): { form: AdvancedForm; generatedSecret: string | null } {
+export function buildAdvancedForm(config: AppConfig): {
+  form: AdvancedForm
+  generatedSecret: string | null
+  generatedApiSecret: string | null
+} {
   const proxy = config.proxy ?? D.proxy
   // Distinguish "never set" (undefined/null → auto-generate) from
   // "intentionally cleared" ('' → respect user choice).
   const hasSecret = config.rpcSecret != null
   const rpcSecret = hasSecret ? config.rpcSecret : generateSecret()
   const generatedSecret = hasSecret ? null : rpcSecret
+
+  // Extension API secret: auto-generate if never set
+  const hasApiSecret = config.extensionApiSecret != null
+  const extensionApiSecret = hasApiSecret ? config.extensionApiSecret! : generateSecret()
+  const generatedApiSecret: string | null = hasApiSecret ? null : extensionApiSecret
 
   return {
     form: {
@@ -65,18 +123,45 @@ export function buildAdvancedForm(config: AppConfig): { form: AdvancedForm; gene
         scope: proxy.scope ?? [...PROXY_SCOPE_OPTIONS],
       },
       trackerSource: config.trackerSource ?? [...D.trackerSource],
+      customTrackerUrls: config.customTrackerUrls ?? [...D.customTrackerUrls],
       btTracker: convertCommaToLine(config.btTracker ?? D.btTracker),
       autoSyncTracker: config.autoSyncTracker ?? D.autoSyncTracker,
       lastSyncTrackerTime: config.lastSyncTrackerTime ?? D.lastSyncTrackerTime,
       rpcListenPort: config.rpcListenPort ?? D.rpcListenPort,
       rpcSecret,
+      extensionApiPort: config.extensionApiPort ?? D.extensionApiPort,
+      extensionApiSecret,
+      autoSubmitFromExtension: config.autoSubmitFromExtension ?? D.autoSubmitFromExtension,
+      autoSelectAllFilesFromExtension: config.autoSelectAllFilesFromExtension ?? D.autoSelectAllFilesFromExtension,
+      silentAutoSubmitFromExtension: config.silentAutoSubmitFromExtension ?? D.silentAutoSubmitFromExtension,
+      autoChangeConflictingPorts: config.autoChangeConflictingPorts ?? D.autoChangeConflictingPorts,
       enableUpnp: config.enableUpnp ?? D.enableUpnp,
       listenPort: Number(config.listenPort ?? D.listenPort),
       dhtListenPort: Number(config.dhtListenPort ?? D.dhtListenPort),
       userAgent: config.userAgent ?? D.userAgent,
       logLevel: config.logLevel ?? D.logLevel,
+      tempFilesDir: config.tempFilesDir ?? D.tempFilesDir,
+      hardwareRendering: config.hardwareRendering ?? D.hardwareRendering,
+      // Clipboard detection
+      clipboardEnable: config.clipboard?.enable ?? D.clipboard.enable,
+      clipboardHttp: config.clipboard?.http ?? D.clipboard.http,
+      clipboardFtp: config.clipboard?.ftp ?? D.clipboard.ftp,
+      clipboardMagnet: config.clipboard?.magnet ?? D.clipboard.magnet,
+      clipboardEd2k: config.clipboard?.ed2k ?? D.clipboard.ed2k,
+      clipboardThunder: config.clipboard?.thunder ?? D.clipboard.thunder,
+      clipboardBtHash: config.clipboard?.btHash ?? D.clipboard.btHash,
+      // Protocol handlers
+      protocolMagnet: config.protocols?.magnet ?? D.protocols.magnet,
+      protocolEd2k: config.protocols?.ed2k ?? D.protocols.ed2k,
+      protocolThunder: config.protocols?.thunder ?? D.protocols.thunder,
+      protocolMotrixnext: config.protocols?.motrixnext ?? D.protocols.motrixnext,
+      // Timeout & disk
+      connectTimeout: config.connectTimeout ?? D.connectTimeout,
+      timeout: config.timeout ?? D.timeout,
+      fileAllocation: config.fileAllocation ?? D.fileAllocation,
     },
     generatedSecret,
+    generatedApiSecret,
   }
 }
 
@@ -95,7 +180,7 @@ export function buildAdvancedSystemConfig(f: AdvancedForm): Record<string, strin
     'listen-port': String(f.listenPort),
     'dht-listen-port': String(f.dhtListenPort),
     'user-agent': f.userAgent || '',
-    'log-level': f.logLevel || 'info',
+    'log-level': f.logLevel || 'debug',
     'bt-tracker': convertLineToComma(f.btTracker),
     'all-proxy': proxyForDownloads ? f.proxy.server : '',
     'no-proxy': proxyForDownloads ? f.proxy.bypass || '' : '',
@@ -104,20 +189,59 @@ export function buildAdvancedSystemConfig(f: AdvancedForm): Record<string, strin
 
 /**
  * Transforms the advanced form for store persistence.
- * Normalizes tracker format and port types.
+ * Collapses flat clipboard/protocol fields into nested objects and
+ * normalizes tracker format.
  */
 export function transformAdvancedForStore(f: AdvancedForm): Record<string, unknown> {
+  const {
+    clipboardEnable,
+    clipboardHttp,
+    clipboardFtp,
+    clipboardMagnet,
+    clipboardEd2k,
+    clipboardThunder,
+    clipboardBtHash,
+    protocolMagnet,
+    protocolEd2k,
+    protocolThunder,
+    protocolMotrixnext,
+    ...rest
+  } = f
   return {
-    ...f,
+    ...rest,
     btTracker: convertLineToComma(f.btTracker),
+    clipboard: {
+      enable: clipboardEnable,
+      http: clipboardHttp,
+      ftp: clipboardFtp,
+      magnet: clipboardMagnet,
+      ed2k: clipboardEd2k,
+      thunder: clipboardThunder,
+      btHash: clipboardBtHash,
+    },
+    protocols: {
+      magnet: protocolMagnet,
+      ed2k: protocolEd2k,
+      thunder: protocolThunder,
+      motrixnext: protocolMotrixnext,
+    },
   }
 }
 
+// ── Form validation ─────────────────────────────────────────────────
+
 /**
- * Validates the advanced form before saving.
- * Returns null if valid, or an error key if invalid.
+ * Validates the advanced preference form before saving.
+ * Returns null if valid, or an i18n error key if invalid.
  */
-export function validateAdvancedForm(_f: AdvancedForm): string | null {
+export function validateAdvancedForm(f: AdvancedForm): string | null {
+  if (f.proxy.enable && f.proxy.server) {
+    if (!isValidAria2ProxyUrl(f.proxy.server)) {
+      return UNSUPPORTED_PROXY_SCHEME_RE.test(f.proxy.server.trim())
+        ? 'preferences.proxy-unsupported-protocol'
+        : 'preferences.invalid-proxy-url'
+    }
+  }
   return null
 }
 

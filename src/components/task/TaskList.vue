@@ -1,12 +1,10 @@
 <script setup lang="ts">
-/** @fileoverview Scrollable task list container with permanent brand watermark. */
+/** @fileoverview Scrollable task list container with AutoAnimate transitions. */
 import { ref, computed, watch } from 'vue'
+import { vAutoAnimate } from '@formkit/auto-animate'
 import { useTaskStore } from '@/stores/task'
-import { useTheme } from '@/composables/useTheme'
 import TaskItem from './TaskItem.vue'
 import type { Aria2Task } from '@shared/types'
-import watermarkDark from '@/assets/logo-bolt-dark.png'
-import watermarkLight from '@/assets/logo-bolt-light.png'
 
 const emit = defineEmits<{
   pause: [task: Aria2Task]
@@ -21,14 +19,6 @@ const emit = defineEmits<{
 }>()
 
 const taskStore = useTaskStore()
-const { isDark } = useTheme()
-const watermarkSrc = computed(() => (isDark.value ? watermarkLight : watermarkDark))
-
-// ── Task list with permanent watermark ───────────────────────────────
-// The watermark is always rendered as a centered background element.
-// Task cards render on top via normal flow + relative positioning,
-// visually covering the watermark when present.  This eliminates all
-// empty-state transitions and tab-switch flicker issues.
 
 const taskList = ref<Aria2Task[]>(taskStore.taskList)
 const selectedGidList = computed(() => taskStore.selectedGidList)
@@ -61,12 +51,7 @@ function handleItemClick(task: Aria2Task, event: MouseEvent) {
 
 <template>
   <div class="task-list">
-    <!-- Permanent brand watermark — always visible behind task cards -->
-    <div class="watermark" @dragstart.prevent @selectstart.prevent>
-      <img :src="watermarkSrc" alt="Motrix Next" class="watermark-brand" draggable="false" />
-    </div>
-    <!-- Task cards render on top of the watermark -->
-    <TransitionGroup name="task-list" tag="div" class="task-list-inner">
+    <div v-auto-animate="{ duration: 300, easing: 'ease-out' }" class="task-list-inner">
       <div
         v-for="item in taskList"
         :key="item.gid"
@@ -87,59 +72,32 @@ function handleItemClick(task: Aria2Task, event: MouseEvent) {
           @stop-seeding="emit('stop-seeding', item)"
         />
       </div>
-    </TransitionGroup>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .task-list {
+  --task-list-bottom-safety: 54px;
   padding: 16px 36px 16px;
   min-height: 100%;
   box-sizing: border-box;
-  position: relative;
   display: flex;
   flex-direction: column;
 }
 /*
- * Speedometer clearance spacer — only when cards are present.
+ * Speedometer bottom safety area — only when cards are present.
  * A ::after pseudo-element participates in flex layout, reliably
- * reserving space above the fixed Speedometer widget.
+ * letting the final card scroll above the fixed Speedometer widget without
+ * forcing short lists to show a scrollbar.
  */
 .task-list-inner:not(:empty)::after {
   content: '';
   display: block;
-  flex: 0 0 50px;
+  height: var(--task-list-bottom-safety);
 }
 
-/* ── Permanent watermark — centered, behind cards ─────────────────── */
-.watermark {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  user-select: none;
-  z-index: 0;
-  animation: watermark-in 0.5s cubic-bezier(0.2, 0, 0, 1) both;
-}
-.watermark-brand {
-  max-width: 480px;
-  width: 80%;
-  opacity: 0.35;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-@keyframes watermark-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* ── Task card layer — above watermark ────────────────────────────── */
+/* ── Task card layer ─────────────────────────────────────────────────── */
 .task-list-inner {
   position: relative;
   z-index: 1;
@@ -149,26 +107,5 @@ function handleItemClick(task: Aria2Task, event: MouseEvent) {
 }
 .task-list-item {
   margin-bottom: 16px;
-}
-
-/* ── TransitionGroup animations ───────────────────────────────────── */
-.task-list-enter-active {
-  transition: all 0.3s cubic-bezier(0.2, 0, 0, 1);
-}
-.task-list-leave-active {
-  transition: all 0.2s cubic-bezier(0.3, 0, 0.8, 0.15);
-  position: absolute;
-  width: 100%;
-}
-.task-list-enter-from {
-  opacity: 0;
-  transform: translateY(24px) scale(0.97);
-}
-.task-list-leave-to {
-  opacity: 0;
-  transform: translateY(-10px) scale(0.97);
-}
-.task-list-move {
-  transition: transform 0.3s cubic-bezier(0.2, 0, 0, 1);
 }
 </style>

@@ -22,7 +22,7 @@ export const changeKeysToCamelCase = (obj: Record<string, unknown> = {}): Record
 }
 
 export const changeKeysToKebabCase = (obj: Record<string, unknown> = {}): Record<string, unknown> => {
-  return changeKeysCase(obj, kebabCase)
+  return changeKeysCase(obj, (key) => kebabCase(key).replace(/^ed-2-k-/, 'ed2k-'))
 }
 
 export const validateNumber = (n: unknown): boolean => {
@@ -78,6 +78,7 @@ export const parseHeader = (header = ''): Record<string, string> => {
   const headers = splitTextRows(header)
   headers.forEach((line) => {
     const index = line.indexOf(':')
+    if (index <= 0) return
     const name = line.substring(0, index)
     const value = line.substring(index + 1).trim()
     result[name] = value
@@ -92,12 +93,13 @@ export const formatOptionsForEngine = (
   const result: Record<string, string> = {}
   Object.keys(options).forEach((key) => {
     const val = options[key]
-    if (val === undefined || val === null || val === '') return
-    const kebabCaseKey = kebabCase(key)
+    if (val === undefined || val === null) return
+    const kebabCaseKey = changeKeysToKebabCase({ [key]: val })
+    const [engineKey] = Object.keys(kebabCaseKey)
     if (Array.isArray(val)) {
-      result[kebabCaseKey] = (val as string[]).join('\n')
+      result[engineKey] = (val as string[]).join('\n')
     } else {
-      result[kebabCaseKey] = `${val}`
+      result[engineKey] = `${val}`
     }
   })
   return result
@@ -126,7 +128,8 @@ export const checkIsNeedRestart = (changed: Record<string, unknown> = {}): boole
 
 /**
  * Keys excluded from runtime hot-reload via aria2 `changeGlobalOption`.
- * - needRestartKeys: bound at process startup (ports, RPC secret)
+ * - needRestartKeys: bound at process startup or intentionally engine-restarted
+ *   so queued runtime work cannot keep stale behavior
  * - aria2 docs exclusions: not accepted by `changeGlobalOption`
  * - log-level: needs full app relaunch (tauri-plugin-log init), not engine restart
  */
@@ -138,7 +141,37 @@ const NON_HOT_RELOADABLE = new Set([
   'pause',
   'select-file',
   'rpc-save-upload-metadata',
+  'enable-dht',
   'log-level',
+])
+
+const REMOVED_ENGINE_KEYS = new Set([
+  'async-dns',
+  'bt-load-saved-metadata',
+  'bt-hash-check-seed',
+  'bt-metadata-only',
+  'bt-prioritize-piece',
+  'bt-remove-unselected-file',
+  'bt-save-metadata',
+  'bt-seed-unverified',
+  'bt-tracker-connect-timeout',
+  'bt-tracker-timeout',
+  'dht-entry-point6',
+  'enable-dht6',
+  'follow-metalink',
+  'follow-torrent',
+  'ftp-reuse-connection',
+  'http-auth-challenge',
+  'metalink-base-uri',
+  'metalink-enable-unique-protocol',
+  'metalink-language',
+  'metalink-location',
+  'metalink-os',
+  'metalink-preferred-protocol',
+  'metalink-version',
+  'ssh-host-key-md',
+  'peer-agent',
+  'peer-id-prefix',
 ])
 
 /**
@@ -147,7 +180,9 @@ const NON_HOT_RELOADABLE = new Set([
  * without requiring an engine restart.
  */
 export const filterHotReloadableKeys = (config: Record<string, string>): Record<string, string> =>
-  Object.fromEntries(Object.entries(config).filter(([key]) => !NON_HOT_RELOADABLE.has(key)))
+  Object.fromEntries(
+    Object.entries(config).filter(([key]) => !NON_HOT_RELOADABLE.has(key) && !REMOVED_ENGINE_KEYS.has(key)),
+  )
 
 export const checkIsNeedRun = (enable: boolean, lastTime: number, interval: number): boolean => {
   if (!enable) return false

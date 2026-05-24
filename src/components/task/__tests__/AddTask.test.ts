@@ -81,9 +81,10 @@ vi.mock('naive-ui', async () => {
   })
 
   const NButton = defineComponent({
+    inheritAttrs: false,
     emits: ['click'],
-    setup(_, { slots, emit }) {
-      return () => h('button', { onClick: () => emit('click') }, slots.default ? slots.default() : [])
+    setup(_, { slots, emit, attrs }) {
+      return () => h('button', { ...attrs, onClick: () => emit('click') }, slots.default ? slots.default() : [])
     },
   })
 
@@ -157,25 +158,6 @@ vi.mock('naive-ui', async () => {
   }
 })
 
-const TorrentUploadStub = defineComponent({
-  name: 'TorrentUpload',
-  props: {
-    loaded: { type: Boolean, default: false },
-  },
-  emits: ['choose'],
-  setup(props, { slots, emit }) {
-    return () =>
-      h('div', [
-        props.loaded
-          ? slots['file-list']
-            ? slots['file-list']()
-            : []
-          : h('button', { onClick: () => emit('choose') }, 'choose-file'),
-        slots.placeholder ? slots.placeholder() : [],
-      ])
-  },
-})
-
 const AdvancedOptionsStub = defineComponent({
   name: 'AdvancedOptions',
   setup() {
@@ -188,7 +170,6 @@ function mountDialog() {
     props: { show: false },
     global: {
       stubs: {
-        TorrentUpload: TorrentUploadStub,
         AdvancedOptions: AdvancedOptionsStub,
       },
     },
@@ -231,7 +212,21 @@ describe('AddTask batch URI integration', () => {
     expect(appStore.pendingBatch).toEqual([])
   })
 
-  it('appends newly added uri batch items while open and deduplicates multiline payloads per line', async () => {
+  it('keeps raw Thunder links visible in the textarea when opening extension batch items', async () => {
+    const appStore = useAppStore()
+    const thunder = 'thunder://' + btoa('AAhttps://example.com/file.zipZZ')
+    appStore.pendingBatch = [createBatchItem('uri', thunder)]
+
+    const wrapper = mountDialog()
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect((getTextarea(wrapper).element as HTMLTextAreaElement).value).toBe(thunder)
+    expect(appStore.pendingBatch).toEqual([])
+  })
+
+  it('replaces textarea with newly arriving batch items (batch priority over prior content)', async () => {
     const appStore = useAppStore()
     appStore.pendingBatch = [createBatchItem('uri', 'https://a.example/file\nhttps://b.example/file')]
 
@@ -244,6 +239,9 @@ describe('AddTask batch URI integration', () => {
       ['https://a.example/file', 'https://b.example/file'].join('\n'),
     )
 
+    // New batch items arrive while dialog is open (e.g. extension deep-link).
+    // These REPLACE the textarea content instead of merging, because batch
+    // content takes priority over any clipboard auto-fill.
     appStore.pendingBatch = [
       createBatchItem('uri', 'https://b.example/file\nhttps://c.example/file'),
       createBatchItem('uri', 'https://a.example/file'),
@@ -252,8 +250,10 @@ describe('AddTask batch URI integration', () => {
     await nextTick()
     await flushPromises()
 
+    // Only the new batch items appear — prior textarea content is replaced.
+    // mergeUriLines still deduplicates within the new batch itself.
     expect((getTextarea(wrapper).element as HTMLTextAreaElement).value).toBe(
-      ['https://a.example/file', 'https://b.example/file', 'https://c.example/file'].join('\n'),
+      ['https://b.example/file', 'https://c.example/file', 'https://a.example/file'].join('\n'),
     )
     expect(appStore.pendingBatch).toEqual([])
   })
@@ -267,9 +267,9 @@ describe('AddTask batch URI integration', () => {
     await wrapper.setProps({ show: true })
     await flushPromises()
 
-    // Batch list should be visible when there are file items
-    const batchListBeforeClose = wrapper.find('.batch-list')
-    expect(batchListBeforeClose.exists()).toBe(true)
+    // Torrent panel should be visible when there are file items
+    const torrentPanel = wrapper.find('.torrent-panel')
+    expect(torrentPanel.exists()).toBe(true)
 
     // Simulate close: clear batch and hide dialog
     appStore.pendingBatch = []
@@ -282,5 +282,230 @@ describe('AddTask batch URI integration', () => {
     await flushPromises()
 
     expect((getTextarea(wrapper).element as HTMLTextAreaElement).value).toBe('')
+  })
+})
+
+describe('AddTask split preference sync', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    resetBatchIdCounter()
+  })
+
+  it('syncs form.split from preferenceStore.config.split when dialog opens', async () => {
+    const { usePreferenceStore } = await import('@/stores/preference')
+    const preferenceStore = usePreferenceStore()
+    // Simulate user having saved maxConnectionPerServer=32 in Basic settings
+    // which writes split=32 to the store via transformDownloadsForStore
+    preferenceStore.$patch({ config: { split: 32, maxConnectionPerServer: 32 } })
+
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    // Initially mounted with stale default (64 from DEFAULT_APP_CONFIG)
+    // Opening the dialog should sync to the store's latest value
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await nextTick()
+
+    // Find the split input (NInputNumber renders as <input type="number">)
+    const numberInputs = wrapper.findAll('input[type="number"]')
+    // The split input should reflect the store value, not the stale default
+    const splitInput = numberInputs.find((i) => Number((i.element as HTMLInputElement).value) <= 64)
+    expect(splitInput).toBeDefined()
+    expect(Number((splitInput!.element as HTMLInputElement).value)).toBe(32)
+  })
+
+  it('preserves current form.split when config.split is absent (no maxConn fallback in v2)', async () => {
+    const { usePreferenceStore } = await import('@/stores/preference')
+    const preferenceStore = usePreferenceStore()
+    // Simulate legacy store data where split was never saved — explicitly
+    // null out split so the ?? fallback keeps current form.split.
+    // After v2 decoupling, there is no fallback to maxConnectionPerServer.
+    preferenceStore.$patch({
+      config: { split: undefined as unknown as number, maxConnectionPerServer: 48 },
+    })
+
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await nextTick()
+
+    const numberInputs = wrapper.findAll('input[type="number"]')
+    const splitInput = numberInputs.find((i) => {
+      const val = Number((i.element as HTMLInputElement).value)
+      return val > 0 && val <= 256
+    })
+    expect(splitInput).toBeDefined()
+    // When config.split is undefined, form.split retains its initialization
+    // value (from config.split in the reactive form, which is the initial 16).
+    // It does NOT fall back to maxConnectionPerServer (v2 decoupling).
+    expect(Number((splitInput!.element as HTMLInputElement).value)).not.toBe(48)
+  })
+
+  it('re-syncs split on subsequent opens after preference changes', async () => {
+    const { usePreferenceStore } = await import('@/stores/preference')
+    const preferenceStore = usePreferenceStore()
+    preferenceStore.$patch({ config: { split: 64, maxConnectionPerServer: 64 } })
+
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    // First open — split should be 64
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await nextTick()
+
+    // Close
+    await wrapper.setProps({ show: false })
+    await flushPromises()
+
+    // User changes preference while dialog is closed
+    preferenceStore.$patch({ config: { split: 16, maxConnectionPerServer: 16 } })
+
+    // Re-open — split should now be 16
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await nextTick()
+
+    const numberInputs = wrapper.findAll('input[type="number"]')
+    const splitInput = numberInputs.find((i) => {
+      const val = Number((i.element as HTMLInputElement).value)
+      return val > 0 && val <= 128
+    })
+    expect(splitInput).toBeDefined()
+    expect(Number((splitInput!.element as HTMLInputElement).value)).toBe(16)
+  })
+})
+
+describe('AddTask redesigned layout and animation structure', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    resetBatchIdCounter()
+  })
+
+  // ── Layout: dual-tab with NTabs ────────────────────────────────────
+
+  it('uses NTabs dual-tab layout with URI and Torrent tabs', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    expect(source).toContain('NTabs')
+    expect(source).toContain('NTabPane')
+    expect(source).toContain('ADD_TASK_TYPE.URI')
+    expect(source).toContain('ADD_TASK_TYPE.TORRENT')
+  })
+
+  it('does not import TorrentUpload — functionality merged inline', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    expect(source).not.toContain('TorrentUpload')
+  })
+
+  it('renders a textarea for URI input in the URI tab', async () => {
+    const appStore = useAppStore()
+    appStore.pendingBatch = []
+
+    const wrapper = mountDialog()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(getTextarea(wrapper).exists()).toBe(true)
+  })
+
+  // ── Torrent panel: conditional rendering ───────────────────────────
+
+  it('shows the torrent panel (.torrent-panel) when fileItems exist', async () => {
+    const appStore = useAppStore()
+    appStore.pendingBatch = [createBatchItem('torrent', '/tmp/a.torrent')]
+
+    const wrapper = mountDialog()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(wrapper.find('.torrent-panel').exists()).toBe(true)
+  })
+
+  it('hides the torrent panel when no fileItems exist', async () => {
+    const appStore = useAppStore()
+    appStore.pendingBatch = []
+
+    const wrapper = mountDialog()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(wrapper.find('.torrent-panel').exists()).toBe(false)
+  })
+
+  it('renders batch items inside the torrent panel', async () => {
+    const appStore = useAppStore()
+    appStore.pendingBatch = [createBatchItem('torrent', '/tmp/a.torrent'), createBatchItem('torrent', '/tmp/b.torrent')]
+
+    const wrapper = mountDialog()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(wrapper.findAll('.batch-item').length).toBe(2)
+  })
+
+  // ── Animation: AutoAnimate list transitions ─────────────────────────
+
+  it('uses v-auto-animate directive for batch list instead of TransitionGroup', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    // Must use AutoAnimate — the industry-standard library
+    expect(source).toContain('v-auto-animate')
+    expect(source).toContain('@formkit/auto-animate')
+    // Must NOT use old TransitionGroup names that caused CSS cascade conflicts
+    expect(source).not.toContain('name="blist"')
+    expect(source).not.toContain('name="bitem"')
+    expect(source).not.toContain('name="batch-item"')
+    // Must NOT have hand-crafted TransitionGroup CSS classes
+    expect(source).not.toContain('.blist-move')
+    expect(source).not.toContain('.blist-leave-active')
+  })
+
+  it('does not define WAAPI animation hooks (AutoAnimate replaces them)', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    expect(source).not.toContain('onItemEnter')
+    expect(source).not.toContain('onItemLeave')
+    expect(source).not.toContain('onBeforeEnter')
+    expect(source).not.toContain('onBeforeLeave')
+    expect(source).not.toContain('savedContainerHeight')
+  })
+
+  // ── Animation: content-fade retained ───────────────────────────────
+
+  it('retains content-fade transition for file detail switching', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    expect(source).toContain('name="content-fade"')
+  })
+
+  // ── No CSS transition class pollution ──────────────────────────────
+
+  it('does not define bitem-* CSS classes (AutoAnimate replaces CSS transitions)', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    expect(source).not.toContain('.bitem-enter-active')
+    expect(source).not.toContain('.bitem-leave-active')
+    expect(source).not.toContain('.bitem-enter-from')
+    expect(source).not.toContain('.bitem-leave-to')
+  })
+
+  it('does not use the old useAddTaskAnimations composable', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    expect(source).not.toContain('useAddTaskAnimations')
+  })
+})
+
+describe('AddTask submit flow', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    resetBatchIdCounter()
+    pushMock.mockClear()
+    warningMock.mockClear()
+  })
+
+  it('keeps the dialog open when manual magnet submission reports failures', async () => {
+    const source = (await import('@/components/task/AddTask.vue?raw')).default
+    expect(source).toContain('manualResult.magnetFailures')
+    expect(source).toContain('const failedCount =')
+    expect(source).toContain('handleClose()')
   })
 })

@@ -1,11 +1,11 @@
 /**
  * @fileoverview Structural tests: every relaunch() call MUST be preceded by
- * stop_engine_command to kill the aria2c sidecar before the NSIS installer
+ * stop_engine_command to kill the bundled engine sidecar before the NSIS installer
  * takes over on Windows.
  *
  * Problem: On Windows, relaunch() launches the NSIS installer which forcefully
- * terminates the main Tauri process. NSIS has no knowledge of the aria2c
- * sidecar child process. If aria2c.exe is still running, Windows' mandatory
+ * terminates the main Tauri process. NSIS has no knowledge of the bundled engine
+ * sidecar child process. If motrix-next-engine.exe is still running, Windows' mandatory
  * file locking prevents NSIS from overwriting it → update failure.
  *
  * Fix: Every code path that calls relaunch() must first call
@@ -21,17 +21,14 @@ import * as path from 'node:path'
 
 const SRC = path.resolve(__dirname, '..', '..', '..')
 const UPDATE_DIALOG = path.join(SRC, 'components', 'preference', 'UpdateDialog.vue')
-const BASIC = path.join(SRC, 'components', 'preference', 'Basic.vue')
 const ADVANCED = path.join(SRC, 'components', 'preference', 'Advanced.vue')
 
 describe('graceful engine shutdown before relaunch()', () => {
   let updateDialogSrc: string
-  let basicSrc: string
   let advancedSrc: string
 
   beforeAll(() => {
     updateDialogSrc = fs.readFileSync(UPDATE_DIALOG, 'utf-8')
-    basicSrc = fs.readFileSync(BASIC, 'utf-8')
     advancedSrc = fs.readFileSync(ADVANCED, 'utf-8')
   })
 
@@ -71,19 +68,6 @@ describe('graceful engine shutdown before relaunch()', () => {
       // No artificial timer — apply_update is awaited directly
       expect(fn!.includes('await invoke')).toBe(true)
       expect(fn!.includes('MIN_')).toBe(false)
-    })
-  })
-
-  // ── Basic.vue ─────────────────────────────────────────────────────
-
-  describe('Basic.vue', () => {
-    it('imports or calls stop_engine_command / stopEngine', () => {
-      expect(basicSrc.includes('stop_engine_command') || basicSrc.includes('stopEngine')).toBe(true)
-    })
-
-    it('every relaunch() call is preceded by stopEngine/stop_engine_command', () => {
-      // Find all relaunch() occurrences and verify each has a stop before it
-      assertStopBeforeEveryRelaunch(basicSrc, 'Basic.vue')
     })
   })
 

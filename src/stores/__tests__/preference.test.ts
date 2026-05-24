@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePreferenceStore } from '../preference'
+import { CURRENT_DB_SCHEMA_VERSION } from '@shared/constants'
+import type { AppConfig } from '@shared/types'
 
 // Mock @tauri-apps/plugin-store — returns an in-memory store
 const mockStoreData = new Map<string, unknown>()
@@ -39,6 +41,13 @@ describe('PreferenceStore', () => {
     expect(mockStoreData.get('preferences')).toBeDefined()
   })
 
+  it('persists the current DB schema version on first save', async () => {
+    await store.updateAndSave({ locale: 'zh-CN' })
+
+    const saved = mockStoreData.get('preferences') as AppConfig
+    expect(saved.dbSchemaVersion).toBe(CURRENT_DB_SCHEMA_VERSION)
+  })
+
   // ─── loadPreference ─────────────────────────────────────
 
   it('loadPreference merges saved config into state', async () => {
@@ -51,7 +60,7 @@ describe('PreferenceStore', () => {
   it('loadPreference keeps defaults when no saved data', async () => {
     await store.loadPreference()
     expect(store.config.theme).toBe('auto')
-    expect(store.config.locale).toBe('')
+    expect(store.config.locale).toBe('auto')
   })
 
   // ─── computed: theme / locale / direction ───────────────
@@ -148,29 +157,6 @@ describe('PreferenceStore', () => {
     expect(store.config.historyDirectories).not.toContain('/a')
     expect(store.config.favoriteDirectories).not.toContain('/a')
     expect(store.config.historyDirectories).toContain('/b')
-  })
-
-  // ── fetchPreference ───────────────────────────────────────
-
-  it('fetchPreference merges remote config into state', async () => {
-    const api = {
-      fetchPreference: vi.fn().mockResolvedValue({ theme: 'dark', split: '8' }),
-    }
-    const result = await store.fetchPreference(api)
-    expect(store.config.theme).toBe('dark')
-    expect(result).toMatchObject({ theme: 'dark', split: '8' })
-  })
-
-  // ── save ──────────────────────────────────────────────────
-
-  it('save calls savePreference API and session saver', async () => {
-    const savePreference = vi.fn().mockResolvedValue(undefined)
-    const saveSession = vi.fn()
-    const cfg = { theme: 'light' as const }
-    await store.save(cfg, { savePreference }, saveSession)
-    expect(saveSession).toHaveBeenCalledOnce()
-    expect(savePreference).toHaveBeenCalledWith(cfg)
-    expect(store.config.theme).toBe('light')
   })
 
   // ── direction edge cases ──────────────────────────────────

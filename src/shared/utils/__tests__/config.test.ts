@@ -32,6 +32,13 @@ describe('changeKeysToKebabCase', () => {
   it('converts camelCase keys to kebab-case', () => {
     expect(changeKeysToKebabCase({ maxSpeed: 100 })).toEqual({ 'max-speed': 100 })
   })
+
+  it('keeps ED2K as one aria2 option prefix', () => {
+    expect(changeKeysToKebabCase({ ed2kListenPort: 4663, ed2kShareFiles: ['/tmp/shared.bin'] })).toEqual({
+      'ed2k-listen-port': 4663,
+      'ed2k-share-files': ['/tmp/shared.bin'],
+    })
+  })
 })
 
 describe('changeKeysCase', () => {
@@ -127,6 +134,14 @@ describe('checkIsNeedRestart', () => {
   it('returns true for dhtListenPort', () => {
     expect(checkIsNeedRestart({ dhtListenPort: 26702 })).toBe(true)
   })
+  it('returns true for ED2K restart keys from AppConfig camelCase fields', () => {
+    expect(checkIsNeedRestart({ ed2kListenPort: 4663 })).toBe(true)
+    expect(checkIsNeedRestart({ ed2kServer: 'server.example:4661' })).toBe(true)
+    expect(checkIsNeedRestart({ ed2kServerList: '/tmp/server.met' })).toBe(true)
+    expect(checkIsNeedRestart({ ed2kNodeList: '/tmp/nodes.dat' })).toBe(true)
+    expect(checkIsNeedRestart({ ed2kUploadSlots: 4 })).toBe(true)
+    expect(checkIsNeedRestart({ ed2kShareFiles: ['/tmp/shared.bin'] })).toBe(true)
+  })
   it('returns false for non-restart keys', () => {
     expect(checkIsNeedRestart({ theme: 'dark' })).toBe(false)
   })
@@ -172,13 +187,25 @@ describe('formatOptionsForEngine', () => {
     const result = formatOptionsForEngine({ maxSpeed: '100' })
     expect(result).toHaveProperty('max-speed')
   })
+  it('formats ED2K option keys with the aria2 ED2K prefix', () => {
+    const result = formatOptionsForEngine({ ed2kListenPort: 4663, ed2kServerList: '/tmp/server.met' })
+    expect(result).toEqual({ 'ed2k-listen-port': '4663', 'ed2k-server-list': '/tmp/server.met' })
+  })
   it('joins arrays with newline', () => {
     const result = formatOptionsForEngine({ trackerSource: ['a', 'b'] })
     expect(result['tracker-source']).toBe('a\nb')
   })
-  it('skips null/undefined/empty-string values', () => {
-    const result = formatOptionsForEngine({ a: undefined, b: null, c: '' })
-    expect(Object.keys(result).length).toBe(0)
+  it('skips null and undefined values', () => {
+    const result = formatOptionsForEngine({ a: undefined, b: null })
+    expect(Object.keys(result)).toHaveLength(0)
+  })
+
+  it('forwards empty-string values (aria2 uses them to clear options like all-proxy)', () => {
+    // Verified in aria2 source: HttpProxyOptionHandler::parseArg (OptionHandlerImpl.cc:504)
+    // accepts empty string to clear the proxy. Filtering '' prevents proxy disable.
+    const result = formatOptionsForEngine({ allProxy: '', noProxy: '' })
+    expect(result['all-proxy']).toBe('')
+    expect(result['no-proxy']).toBe('')
   })
   it('keeps numeric 0 value (converted to string)', () => {
     const result = formatOptionsForEngine({ seedTime: 0 })
@@ -210,6 +237,13 @@ describe('parseHeader', () => {
   it('returns empty for whitespace-only string', () => {
     expect(parseHeader('   ')).toEqual({})
   })
+  it('ignores malformed header lines without creating an empty key', () => {
+    const result = parseHeader('Content-Type: text/html\nmalformed line\nAuthorization: Bearer abc')
+    expect(result).toEqual({
+      contentType: 'text/html',
+      authorization: 'Bearer abc',
+    })
+  })
 })
 
 describe('filterHotReloadableKeys', () => {
@@ -229,6 +263,7 @@ describe('filterHotReloadableKeys', () => {
       'rpc-secret': 'abc',
       'listen-port': '21301',
       'dht-listen-port': '26701',
+      'enable-dht': 'true',
     }
     expect(filterHotReloadableKeys(config)).toEqual({})
   })
@@ -247,6 +282,18 @@ describe('filterHotReloadableKeys', () => {
 
   it('strips log-level (needs app relaunch, not engine restart)', () => {
     expect(filterHotReloadableKeys({ 'log-level': 'debug' })).toEqual({})
+  })
+
+  it('strips engine options removed by Aria2 Next', () => {
+    const config = {
+      'bt-save-metadata': 'true',
+      'bt-seed-unverified': 'false',
+      'http-auth-challenge': 'true',
+      'max-overall-download-limit': '1M',
+    }
+    expect(filterHotReloadableKeys(config)).toEqual({
+      'max-overall-download-limit': '1M',
+    })
   })
 
   it('returns empty for empty input', () => {

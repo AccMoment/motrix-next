@@ -17,8 +17,7 @@ export function isMagnetUri(uri: string): boolean {
 export function buildMetadataOnlyOptions(baseOptions: Aria2EngineOptions): Aria2EngineOptions {
   return {
     ...baseOptions,
-    'bt-metadata-only': 'true',
-    'follow-torrent': 'false',
+    'pause-metadata': 'true',
   }
 }
 
@@ -33,7 +32,7 @@ export interface MagnetFileItem {
 /** Convert raw Aria2File array into UI-friendly selection items. */
 export function parseFilesForSelection(files: Aria2File[]): MagnetFileItem[] {
   return files.map((f) => {
-    const parts = f.path.split('/')
+    const parts = f.path.split(/[/\\]/)
     return {
       index: Number(f.index),
       name: parts[parts.length - 1],
@@ -62,14 +61,12 @@ export function buildSelectFileOption(indices: number[]): string {
  * Defaults to true (show dialog) when the config value is missing,
  * aligning with the industry standard of giving users control over file selection.
  */
-export function shouldShowFileSelection(config: { pauseMetadata?: boolean }): boolean {
-  return config.pauseMetadata !== false
+export function shouldShowFileSelection(config: { pauseMetadata?: boolean | string }): boolean {
+  return config.pauseMetadata !== false && config.pauseMetadata !== 'false'
 }
 
 /** Actions needed to apply file selection to a download based on its current status. */
 export interface ConfirmAction {
-  /** Whether the task must be paused first (required for active tasks). */
-  needsPause: boolean
   /** Whether the task must be resumed after applying options. */
   needsResume: boolean
 }
@@ -79,23 +76,22 @@ export interface ConfirmAction {
  * to a magnet download based on its current aria2 task status.
  *
  * - paused:   standard case with pause-metadata=true — just resume
- * - active:   defensive case — must pause first, then change options, then resume
  * - waiting:  queued task — just resume
+ * - active:   engine failed to honor pause-metadata — do not race pause/unpause
  * - complete/removed/error: terminal states — no action needed
  * - undefined: safe fallback — treat as resumable
  */
 export function buildStatusAwareConfirmAction(status: string | undefined): ConfirmAction {
   switch (status) {
-    case 'active':
-      return { needsPause: true, needsResume: true }
     case 'paused':
     case 'waiting':
     case undefined:
-      return { needsPause: false, needsResume: true }
+      return { needsResume: true }
+    case 'active':
     case 'complete':
     case 'removed':
     case 'error':
     default:
-      return { needsPause: false, needsResume: false }
+      return { needsResume: false }
   }
 }

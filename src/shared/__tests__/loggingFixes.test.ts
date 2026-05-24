@@ -13,7 +13,7 @@ const TAURI_ROOT = path.join(SRC_ROOT, 'src-tauri')
 
 // ─── Fix 1: Default log level ──────────────────────────────────────
 
-describe('Fix 1: Default log level = info', () => {
+describe('Fix 1: Default log level = debug', () => {
   let constantsSource: string
   let composableSource: string
 
@@ -22,17 +22,17 @@ describe('Fix 1: Default log level = info', () => {
     composableSource = fs.readFileSync(path.join(SRC_ROOT, 'src', 'composables', 'useAdvancedPreference.ts'), 'utf-8')
   })
 
-  it("DEFAULT_APP_CONFIG.logLevel is 'info'", () => {
+  it("DEFAULT_APP_CONFIG.logLevel is 'debug'", () => {
     // Extract the logLevel value from the DEFAULT_APP_CONFIG block
     const match = constantsSource.match(/logLevel:\s*'(\w+)'/)
     expect(match).toBeTruthy()
-    expect(match![1]).toBe('info')
+    expect(match![1]).toBe('debug')
   })
 
-  it("buildAdvancedSystemConfig fallback is 'info' (not 'warn')", () => {
+  it("buildAdvancedSystemConfig fallback is 'debug' (not 'warn')", () => {
     const systemConfigBlock = composableSource.slice(composableSource.indexOf('buildAdvancedSystemConfig'))
-    // Should use 'info' as fallback in log-level system config
-    expect(systemConfigBlock).toContain("f.logLevel || 'info'")
+    // Should use 'debug' as fallback in log-level system config
+    expect(systemConfigBlock).toContain("f.logLevel || 'debug'")
     expect(systemConfigBlock).not.toContain("f.logLevel || 'warn'")
   })
 })
@@ -69,7 +69,7 @@ describe('Fix 3: Export uses save dialog (user chooses path)', () => {
   let appRsSource: string
 
   beforeAll(() => {
-    appRsSource = fs.readFileSync(path.join(TAURI_ROOT, 'src', 'commands', 'app.rs'), 'utf-8')
+    appRsSource = fs.readFileSync(path.join(TAURI_ROOT, 'src', 'commands', 'fs.rs'), 'utf-8')
   })
 
   it('Advanced.vue (or its composable) imports the save dialog from @tauri-apps/plugin-dialog', () => {

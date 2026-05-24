@@ -7,15 +7,42 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }))
 
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}))
+
 vi.mock('@tauri-apps/plugin-os', () => ({
   platform: vi.fn(() => 'macos'),
 }))
 
-vi.mock('@/stores/preference', () => ({
-  usePreferenceStore: () => ({
-    config: { traySpeedometer: false, dockBadgeSpeed: false, showProgressBar: false },
+const submitManualUrisMock = vi.hoisted(() => vi.fn().mockResolvedValue({}))
+const submitBatchItemsMock = vi.hoisted(() => vi.fn().mockResolvedValue(0))
+const resolveUnresolvedItemsMock = vi.hoisted(() =>
+  vi.fn(async (items: import('@shared/types').BatchItem[], _t: (key: string) => string, _downloadProxy?: string) => {
+    for (const item of items) {
+      item.payload = 'resolved-payload'
+      item.status = 'pending'
+    }
   }),
-}))
+)
+
+vi.mock('@/composables/useAddTaskSubmit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/composables/useAddTaskSubmit')>()
+  return {
+    ...actual,
+    submitManualUris: (...args: Parameters<typeof actual.submitManualUris>) => submitManualUrisMock(...args),
+    submitBatchItems: (...args: Parameters<typeof actual.submitBatchItems>) => submitBatchItemsMock(...args),
+  }
+})
+
+vi.mock('@/composables/useAddTaskFileOps', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/composables/useAddTaskFileOps')>()
+  return {
+    ...actual,
+    resolveUnresolvedItems: (...args: Parameters<typeof actual.resolveUnresolvedItems>) =>
+      resolveUnresolvedItemsMock(...args),
+  }
+})
 
 import { useAppStore } from '../app'
 import { createBatchItem, resetBatchIdCounter } from '@shared/utils/batchHelpers'
@@ -24,6 +51,11 @@ describe('useAppStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     resetBatchIdCounter()
+    submitManualUrisMock.mockReset()
+    submitManualUrisMock.mockResolvedValue({ submittedTaskNames: [], magnetGids: [], magnetFailures: [] })
+    submitBatchItemsMock.mockReset()
+    submitBatchItemsMock.mockResolvedValue(0)
+    resolveUnresolvedItemsMock.mockClear()
   })
 
   // ── enqueueBatch ────────────────────────────────────────────────
@@ -170,7 +202,7 @@ describe('useAppStore', () => {
     })
   })
 
-  // ── fetchGlobalStat ─────────────────────────────────────────────
+  // ── fetchGlobalStat (one-shot initializer) ───────────────────────
 
   describe('fetchGlobalStat', () => {
     it('parses numeric stat values from string response', async () => {
@@ -203,7 +235,6 @@ describe('useAppStore', () => {
         }),
       }
       await store.fetchGlobalStat(api)
-      // STAT_BASE_INTERVAL - STAT_PER_TASK_INTERVAL * 3 → clamped to MIN
       expect(store.interval).toBeLessThanOrEqual(STAT_BASE_INTERVAL)
     })
 
@@ -232,13 +263,7 @@ describe('useAppStore', () => {
       await expect(store.fetchGlobalStat(api)).resolves.toBeUndefined()
     })
 
-    it('calls update_tray_title with speed when traySpeedometer enabled and downloading', async () => {
-      // Override preference mock to enable tray speedometer
-      const prefMod = await import('@/stores/preference')
-      vi.spyOn(prefMod, 'usePreferenceStore').mockReturnValue({
-        config: { traySpeedometer: true, dockBadgeSpeed: false, showProgressBar: false },
-      } as ReturnType<typeof prefMod.usePreferenceStore>)
-
+    it('does NOT invoke tray/dock/progress commands (Rust handles those)', async () => {
       const { invoke } = await import('@tauri-apps/api/core')
       const store = useAppStore()
       const api = {
@@ -251,69 +276,90 @@ describe('useAppStore', () => {
         }),
       }
       await store.fetchGlobalStat(api)
-
-      // Should have called update_tray_title with a speed string (↓...)
-      const trayCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === 'update_tray_title',
+      // After the architectural migration, fetchGlobalStat is a pure data
+      // initializer — it must not invoke any tray/dock/progress commands.
+      const uiCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter((c: unknown[]) =>
+        ['update_tray_title', 'update_dock_badge', 'update_progress_bar'].includes(c[0] as string),
       )
-      expect(trayCalls.length).toBeGreaterThan(0)
-      const titleArg = trayCalls[trayCalls.length - 1][1] as { title: string }
-      expect(titleArg.title).toMatch(/↓/)
-      expect(titleArg.title.length).toBeGreaterThan(1)
+      expect(uiCalls).toHaveLength(0)
+    })
+  })
+
+  // ── handleStatEvent (Rust event → reactive state) ───────────────
+
+  describe('handleStatEvent', () => {
+    it('updates stat values from event payload', () => {
+      const store = useAppStore()
+      store.handleStatEvent({
+        downloadSpeed: 204800,
+        uploadSpeed: 10240,
+        numActive: 2,
+        numWaiting: 1,
+        numStopped: 5,
+        numStoppedTotal: 10,
+      })
+      expect(store.stat.downloadSpeed).toBe(204800)
+      expect(store.stat.uploadSpeed).toBe(10240)
+      expect(store.stat.numActive).toBe(2)
+      expect(store.stat.numWaiting).toBe(1)
+      expect(store.stat.numStopped).toBe(5)
     })
 
-    it('clears tray title when traySpeedometer enabled but no download speed', async () => {
-      const prefMod = await import('@/stores/preference')
-      vi.spyOn(prefMod, 'usePreferenceStore').mockReturnValue({
-        config: { traySpeedometer: true, dockBadgeSpeed: false, showProgressBar: false },
-      } as ReturnType<typeof prefMod.usePreferenceStore>)
-
-      const { invoke } = await import('@tauri-apps/api/core')
+    it('decreases interval when active tasks are present', () => {
       const store = useAppStore()
-      const api = {
-        getGlobalStat: vi.fn().mockResolvedValue({
-          downloadSpeed: '0',
-          uploadSpeed: '0',
-          numActive: '0',
-          numWaiting: '0',
-          numStopped: '2',
-        }),
-      }
-      await store.fetchGlobalStat(api)
-
-      const trayCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === 'update_tray_title',
-      )
-      expect(trayCalls.length).toBeGreaterThan(0)
-      const titleArg = trayCalls[trayCalls.length - 1][1] as { title: string }
-      expect(titleArg.title).toBe('')
+      store.interval = STAT_BASE_INTERVAL
+      store.handleStatEvent({
+        downloadSpeed: 1000,
+        uploadSpeed: 0,
+        numActive: 3,
+        numWaiting: 0,
+        numStopped: 0,
+        numStoppedTotal: 0,
+      })
+      expect(store.interval).toBeLessThanOrEqual(STAT_BASE_INTERVAL)
     })
 
-    it('shows upload speed in tray when uploading but not downloading', async () => {
-      const prefMod = await import('@/stores/preference')
-      vi.spyOn(prefMod, 'usePreferenceStore').mockReturnValue({
-        config: { traySpeedometer: true, dockBadgeSpeed: false, showProgressBar: false },
-      } as ReturnType<typeof prefMod.usePreferenceStore>)
-
-      const { invoke } = await import('@tauri-apps/api/core')
+    it('increases interval when idle (numActive = 0)', () => {
       const store = useAppStore()
-      const api = {
-        getGlobalStat: vi.fn().mockResolvedValue({
-          downloadSpeed: '0',
-          uploadSpeed: '524288',
-          numActive: '1',
-          numWaiting: '0',
-          numStopped: '0',
-        }),
-      }
-      await store.fetchGlobalStat(api)
+      const before = store.interval
+      store.handleStatEvent({
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        numActive: 0,
+        numWaiting: 0,
+        numStopped: 3,
+        numStoppedTotal: 5,
+      })
+      expect(store.interval).toBeGreaterThanOrEqual(before)
+    })
 
-      const trayCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === 'update_tray_title',
-      )
-      expect(trayCalls.length).toBeGreaterThan(0)
-      const titleArg = trayCalls[trayCalls.length - 1][1] as { title: string }
-      expect(titleArg.title).toMatch(/↑/)
+    it('zeros downloadSpeed when no active tasks', () => {
+      const store = useAppStore()
+      store.handleStatEvent({
+        downloadSpeed: 999,
+        uploadSpeed: 100,
+        numActive: 0,
+        numWaiting: 0,
+        numStopped: 1,
+        numStoppedTotal: 1,
+      })
+      // downloadSpeed is forced to 0 when numActive === 0
+      // (matches fetchGlobalStat behavior and Rust's expectation)
+      expect(store.stat.downloadSpeed).toBe(0)
+      expect(store.stat.uploadSpeed).toBe(100)
+    })
+
+    it('preserves downloadSpeed when tasks are active', () => {
+      const store = useAppStore()
+      store.handleStatEvent({
+        downloadSpeed: 512000,
+        uploadSpeed: 0,
+        numActive: 1,
+        numWaiting: 0,
+        numStopped: 0,
+        numStoppedTotal: 0,
+      })
+      expect(store.stat.downloadSpeed).toBe(512000)
     })
   })
 
@@ -348,26 +394,33 @@ describe('useAppStore', () => {
   // ── handleDeepLinkUrls ──────────────────────────────────────────
 
   describe('handleDeepLinkUrls', () => {
-    it('keeps remote .torrent and .metalink URLs as uri items', () => {
+    beforeEach(async () => {
+      const { usePreferenceStore } = await import('@/stores/preference')
+      usePreferenceStore().config.autoSubmitFromExtension = false
+    })
+
+    it('detects remote .torrent URLs with correct kind', () => {
       const store = useAppStore()
-      store.handleDeepLinkUrls([
-        'https://example.com/linux.torrent',
-        'https://example.com/bundle.meta4',
-        'ftp://example.com/archive.metalink',
-      ])
+      store.handleDeepLinkUrls(['https://example.com/linux.torrent'])
       expect(store.pendingBatch.map((i) => ({ kind: i.kind, source: i.source }))).toEqual([
-        { kind: 'uri', source: 'https://example.com/linux.torrent' },
-        { kind: 'uri', source: 'https://example.com/bundle.meta4' },
-        { kind: 'uri', source: 'ftp://example.com/archive.metalink' },
+        { kind: 'torrent', source: 'https://example.com/linux.torrent' },
       ])
     })
 
-    it('keeps local file:// torrent and metalink references as file items', () => {
+    it('keeps local file:// torrent references as file items', () => {
       const store = useAppStore()
-      store.handleDeepLinkUrls(['file:///Users/test/Downloads/a.torrent', 'file:///Users/test/Downloads/b.meta4'])
+      store.handleDeepLinkUrls(['file:///Users/test/Downloads/a.torrent'])
       expect(store.pendingBatch.map((i) => ({ kind: i.kind, source: i.source }))).toEqual([
         { kind: 'torrent', source: '/Users/test/Downloads/a.torrent' },
-        { kind: 'metalink', source: '/Users/test/Downloads/b.meta4' },
+      ])
+    })
+
+    it('normalizes Windows file URIs without leaving a leading slash before the drive letter', () => {
+      const store = useAppStore()
+      store.handleDeepLinkUrls(['file:///C:/Users/test/Downloads/Space%20Name.torrent'])
+
+      expect(store.pendingBatch.map((i) => ({ kind: i.kind, source: i.source }))).toEqual([
+        { kind: 'torrent', source: 'C:/Users/test/Downloads/Space Name.torrent' },
       ])
     })
 
@@ -376,6 +429,15 @@ describe('useAppStore', () => {
       store.handleDeepLinkUrls(['magnet:?xt=urn:btih:abc123'])
       expect(store.pendingBatch[0].kind).toBe('uri')
       expect(store.pendingBatch[0].source).toBe('magnet:?xt=urn:btih:abc123')
+    })
+
+    it('handles ED2K file links as URI tasks', () => {
+      const store = useAppStore()
+      const url = 'ed2k://|file|Ubuntu%2026.04.iso|123456789|0123456789abcdef0123456789abcdef|/'
+      store.handleDeepLinkUrls([url])
+      expect(store.pendingBatch[0].kind).toBe('uri')
+      expect(store.pendingBatch[0].source).toBe(url)
+      expect(store.pendingBatch[0].displayName).toBe(url)
     })
 
     it('no-ops for empty or null-ish input', () => {
@@ -392,6 +454,383 @@ describe('useAppStore', () => {
         'file:///local/path.torrent',
       ])
       expect(store.pendingBatch).toHaveLength(3)
+    })
+
+    it('extracts referer from motrixnext://new deep link', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://cdn.example.com/file.zip')
+      const referer = encodeURIComponent('https://example.com/downloads')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&referer=${referer}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingBatch[0].source).toBe('https://cdn.example.com/file.zip')
+      expect(store.pendingReferer).toBe('https://example.com/downloads')
+    })
+
+    it('handles single-slash motrixnext new deep links', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://cdn.example.com/file.zip')
+      store.handleDeepLinkUrls([`motrixnext:/new?url=${url}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingBatch[0].source).toBe('https://cdn.example.com/file.zip')
+      expect(store.addTaskVisible).toBe(true)
+    })
+
+    it('sets pendingReferer to empty when deep link has no referer param', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://example.com/file.zip')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingReferer).toBe('')
+    })
+
+    it('uses last referer when multiple deep links arrive', () => {
+      const store = useAppStore()
+      const url1 = encodeURIComponent('https://cdn.example.com/a.zip')
+      const ref1 = encodeURIComponent('https://site-a.com')
+      const url2 = encodeURIComponent('https://cdn.example.com/b.zip')
+      const ref2 = encodeURIComponent('https://site-b.com')
+      store.handleDeepLinkUrls([
+        `motrixnext://new?url=${url1}&referer=${ref1}`,
+        `motrixnext://new?url=${url2}&referer=${ref2}`,
+      ])
+
+      expect(store.pendingBatch).toHaveLength(2)
+      expect(store.pendingReferer).toBe('https://site-b.com')
+    })
+
+    it('clears pendingReferer when hideAddTaskDialog is called', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://example.com/file.zip')
+      const referer = encodeURIComponent('https://example.com')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&referer=${referer}`])
+      expect(store.pendingReferer).toBe('https://example.com')
+
+      store.hideAddTaskDialog()
+      expect(store.pendingReferer).toBe('')
+    })
+
+    // ── Cookie extraction (mirrors referer tests above) ────────────
+
+    it('extracts cookie from motrixnext://new deep link', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://cdn.quark.cn/file.zip')
+      const cookie = encodeURIComponent('session=abc123; token=xyz')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&cookie=${cookie}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingBatch[0].source).toBe('https://cdn.quark.cn/file.zip')
+      expect(store.pendingCookie).toBe('session=abc123; token=xyz')
+    })
+
+    it('sets pendingCookie to empty when deep link has no cookie param', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://example.com/file.zip')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingCookie).toBe('')
+    })
+
+    it('uses last cookie when multiple deep links arrive', () => {
+      const store = useAppStore()
+      const url1 = encodeURIComponent('https://cdn.a.com/file.zip')
+      const c1 = encodeURIComponent('sid=aaa')
+      const url2 = encodeURIComponent('https://cdn.b.com/file.zip')
+      const c2 = encodeURIComponent('sid=bbb')
+      store.handleDeepLinkUrls([
+        `motrixnext://new?url=${url1}&cookie=${c1}`,
+        `motrixnext://new?url=${url2}&cookie=${c2}`,
+      ])
+
+      expect(store.pendingBatch).toHaveLength(2)
+      expect(store.pendingCookie).toBe('sid=bbb')
+    })
+
+    it('clears pendingCookie when hideAddTaskDialog is called', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://example.com/file.zip')
+      const cookie = encodeURIComponent('auth=secret')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&cookie=${cookie}`])
+      expect(store.pendingCookie).toBe('auth=secret')
+
+      store.hideAddTaskDialog()
+      expect(store.pendingCookie).toBe('')
+    })
+
+    it('extracts both referer and cookie from same deep link', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://cdn.quark.cn/file.zip')
+      const referer = encodeURIComponent('https://pan.quark.cn')
+      const cookie = encodeURIComponent('__puus=abc; __pus=def')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&referer=${referer}&cookie=${cookie}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingReferer).toBe('https://pan.quark.cn')
+      expect(store.pendingCookie).toBe('__puus=abc; __pus=def')
+    })
+
+    // ── Filename extraction (mirrors referer/cookie tests above) ────
+
+    it('extracts filename from motrixnext://new deep link', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://cdn.quark.cn/hash123')
+      const filename = encodeURIComponent('ghost-sample-v0.1.xmgic')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&filename=${filename}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingBatch[0].source).toBe('https://cdn.quark.cn/hash123')
+      expect(store.pendingFilename).toBe('ghost-sample-v0.1.xmgic')
+    })
+
+    it('sets pendingFilename to empty when deep link has no filename param', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://example.com/file.zip')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingFilename).toBe('')
+    })
+
+    it('clears pendingFilename when hideAddTaskDialog is called', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://cdn.quark.cn/hash123')
+      const filename = encodeURIComponent('test.zip')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&filename=${filename}`])
+      expect(store.pendingFilename).toBe('test.zip')
+
+      store.hideAddTaskDialog()
+      expect(store.pendingFilename).toBe('')
+    })
+
+    it('extracts filename together with referer and cookie', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://cdn.quark.cn/hash123')
+      const referer = encodeURIComponent('https://pan.quark.cn')
+      const cookie = encodeURIComponent('__puus=abc')
+      const filename = encodeURIComponent('ghost-sample-v0.1.xmgic')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&referer=${referer}&cookie=${cookie}&filename=${filename}`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingReferer).toBe('https://pan.quark.cn')
+      expect(store.pendingCookie).toBe('__puus=abc')
+      expect(store.pendingFilename).toBe('ghost-sample-v0.1.xmgic')
+    })
+
+    it('ignores generic browser fallback filename from extension deep link', () => {
+      const store = useAppStore()
+      const url = encodeURIComponent('https://mail-attachment.googleusercontent.com/attachment/u/0/')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${url}&filename=download`])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingFilename).toBe('')
+      expect(store.pendingBatch[0].displayName).not.toBe('download')
+    })
+  })
+
+  // ── autoSubmitFromExtension ───────────────────────────────────────
+
+  describe('autoSubmitFromExtension', () => {
+    beforeEach(async () => {
+      const { usePreferenceStore } = await import('@/stores/preference')
+      usePreferenceStore().recordHistoryDirectory = vi.fn()
+    })
+
+    // Helper: build a motrixnext://new deep link
+    function buildDeepLink(downloadUrl: string, referer = '', cookie = '', filename = ''): string {
+      const u = encodeURIComponent(downloadUrl)
+      const r = referer ? `&referer=${encodeURIComponent(referer)}` : ''
+      const c = cookie ? `&cookie=${encodeURIComponent(cookie)}` : ''
+      const f = filename ? `&filename=${encodeURIComponent(filename)}` : ''
+      return `motrixnext://new?url=${u}${r}${c}${f}`
+    }
+
+    it('auto-submits HTTP URI when enabled', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+      const onStart = vi.fn()
+      store.setExternalInputStartHandler(onStart)
+      submitManualUrisMock.mockResolvedValueOnce({
+        submittedTaskNames: ['file.zip'],
+        magnetGids: [],
+        magnetFailures: [],
+      })
+
+      store.handleDeepLinkUrls([buildDeepLink('https://example.com/file.zip')])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      // Auto-submitted: pendingBatch should be empty, dialog should NOT open
+      expect(store.pendingBatch).toHaveLength(0)
+      expect(store.addTaskVisible).toBe(false)
+      expect(onStart).toHaveBeenCalledWith(['file.zip'])
+    })
+
+    it('auto-submits magnet URI when enabled', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+
+      store.handleDeepLinkUrls([buildDeepLink('magnet:?xt=urn:btih:abc123')])
+
+      expect(store.pendingBatch).toHaveLength(0)
+      expect(store.addTaskVisible).toBe(false)
+    })
+
+    it('auto-submits ED2K URI when enabled', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+
+      store.handleDeepLinkUrls([
+        buildDeepLink('ed2k://|file|Ubuntu%2026.04.iso|123456789|0123456789abcdef0123456789abcdef|/'),
+      ])
+
+      expect(store.pendingBatch).toHaveLength(0)
+      expect(store.addTaskVisible).toBe(false)
+    })
+
+    it('falls back to AddTask dialog when disabled', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = false
+
+      store.handleDeepLinkUrls([buildDeepLink('https://example.com/file.zip')])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.addTaskVisible).toBe(true)
+    })
+
+    it('shows dialog for .torrent URLs when file auto-select is disabled', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+      prefStore.config.autoSelectAllFilesFromExtension = false
+
+      store.handleDeepLinkUrls([buildDeepLink('https://example.com/linux.torrent')])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingBatch[0].kind).toBe('torrent')
+      expect(store.addTaskVisible).toBe(true)
+    })
+
+    it('auto-submits torrent URLs when file auto-select is enabled', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+      prefStore.config.autoSelectAllFilesFromExtension = true
+
+      store.handleDeepLinkUrls([buildDeepLink('https://example.com/linux.torrent')])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(store.pendingBatch).toHaveLength(0)
+      expect(store.addTaskVisible).toBe(false)
+      expect(resolveUnresolvedItemsMock).toHaveBeenCalledTimes(1)
+      expect(submitBatchItemsMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('auto-submits magnet URLs with metadata pause disabled when file auto-select is enabled', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+      prefStore.config.autoSelectAllFilesFromExtension = true
+
+      store.handleDeepLinkUrls([buildDeepLink('magnet:?xt=urn:btih:abc123')])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(submitManualUrisMock).toHaveBeenCalledTimes(1)
+      expect(submitManualUrisMock.mock.calls[0][1]).toMatchObject({ 'pause-metadata': 'false' })
+      expect(store.addTaskVisible).toBe(false)
+    })
+
+    it('handles mixed batch: auto-submits URIs, dialogs torrent', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+
+      store.handleDeepLinkUrls([
+        buildDeepLink('https://example.com/file.zip'),
+        buildDeepLink('https://example.com/linux.torrent'),
+      ])
+
+      // file.zip auto-submitted, linux.torrent goes to dialog
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingBatch[0].source).toBe('https://example.com/linux.torrent')
+      expect(store.addTaskVisible).toBe(true)
+    })
+
+    it('does not open dialog when all items are auto-submitted', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+
+      store.handleDeepLinkUrls([buildDeepLink('https://example.com/a.zip'), buildDeepLink('https://example.com/b.mp4')])
+
+      expect(store.pendingBatch).toHaveLength(0)
+      expect(store.addTaskVisible).toBe(false)
+    })
+
+    it('still sets pendingReferer even when auto-submitting', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+
+      store.handleDeepLinkUrls([buildDeepLink('https://example.com/file.zip', 'https://example.com')])
+
+      // referer should still be extracted (used in auto-submit form)
+      expect(store.pendingReferer).toBe('https://example.com')
+    })
+
+    it('forwards cookie to aria2 header when auto-submitting', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+
+      store.handleDeepLinkUrls([buildDeepLink('https://cdn.quark.cn/file.zip', 'https://pan.quark.cn', 'auth=secret')])
+
+      // Cookie should be extracted even during auto-submit
+      expect(store.pendingCookie).toBe('auth=secret')
+    })
+
+    it('non-extension deep links (file://, http://) are unaffected by auto-submit', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+
+      // Regular deep links (not motrixnext://) should always go to dialog
+      store.handleDeepLinkUrls(['https://example.com/file.zip'])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.addTaskVisible).toBe(true)
+    })
+
+    it('reports readable auto-submit errors for structured Tauri failures', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+      const onError = vi.fn()
+      submitManualUrisMock.mockRejectedValueOnce({ Aria2: 'aria2 RPC error [1]: Unsupported URI scheme' })
+
+      store.setExternalInputErrorHandler(onError)
+      store.handleDeepLinkUrls([buildDeepLink('23222233')])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(onError).toHaveBeenCalledWith({ Aria2: 'aria2 RPC error [1]: Unsupported URI scheme' })
     })
   })
 })

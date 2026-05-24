@@ -1,4 +1,4 @@
-//! Engine management for the aria2c sidecar process.
+//! Engine management for the bundled Motrix Next engine sidecar.
 //!
 //! Split into focused sub-modules:
 //! - [`state`] — `EngineState` struct, ANSI stripping, log routing
@@ -12,4 +12,5 @@ mod lifecycle;
 mod state;
 
 pub use lifecycle::{restart_engine, start_engine, stop_engine};
+pub(crate) use state::path_to_safe_string;
 pub use state::EngineState;

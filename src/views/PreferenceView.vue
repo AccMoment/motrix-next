@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** @fileoverview Preference settings view with basic/advanced sub-routes. */
+/** @fileoverview Preference settings view with preference sub-routes. */
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
@@ -9,8 +9,12 @@ const route = useRoute()
 
 const tabKey = computed(() => {
   const path = route.path
+  if (path.includes('downloads')) return 'downloads'
+  if (path.includes('bt')) return 'bt'
+  if (path.includes('ed2k')) return 'ed2k'
+  if (path.includes('network')) return 'network'
   if (path.includes('advanced')) return 'advanced'
-  return 'basic'
+  return 'general'
 })
 </script>
 
@@ -36,7 +40,7 @@ const tabKey = computed(() => {
   height: 100%;
 }
 .panel-header {
-  padding: 46px 0 12px;
+  padding: var(--header-top-offset) 0 12px;
   margin: 0 36px;
   border-bottom: 2px solid var(--panel-border);
   user-select: none;

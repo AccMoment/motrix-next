@@ -3,10 +3,11 @@
 import { ref, computed, watch, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { TASK_STATUS } from '@shared/constants'
+import { logger } from '@shared/logger'
 import {
   checkTaskIsBT,
   checkTaskIsSeeder,
-  getTaskName,
+  getTaskDisplayName,
   bytesToSize,
   calcProgress,
   calcRatio,
@@ -18,6 +19,9 @@ import {
   timeRemaining,
   timeFormat,
 } from '@shared/utils'
+import { decodePathSegment } from '@shared/utils/batchHelpers'
+import { calcColumnWidth } from '@shared/utils/calcColumnWidth'
+import { countryCodeToFlag, lookupPeerIps, type GeoInfo } from '@shared/utils/geoip'
 import {
   NDrawer,
   NDrawerContent,
@@ -28,6 +32,13 @@ import {
   NProgress,
   NTag,
   NButton,
+  NRadioGroup,
+  NRadio,
+  NInput,
+  NFormItem,
+  NCollapseTransition,
+  NEllipsis,
+  NTooltip,
 } from 'naive-ui'
 import {
   InformationCircleOutline,
@@ -35,9 +46,18 @@ import {
   DocumentOutline,
   PeopleOutline,
   ServerOutline,
+  SettingsOutline,
+  SearchOutline,
 } from '@vicons/ionicons5'
 import TaskGraphic from './TaskGraphic.vue'
 import { useTrackerProbe, buildTrackerRows, type TrackerRow } from '@/composables/useTrackerProbe'
+import { useTaskDetailOptions } from '@/composables/useTaskDetailOptions'
+import { usePreferenceStore } from '@/stores/preference'
+import { useTaskStore } from '@/stores/task'
+import { useHistoryStore } from '@/stores/history'
+import { useAppMessage } from '@/composables/useAppMessage'
+import { useSystemProxyDetect } from '@/composables/useSystemProxyDetect'
+import { getAddedAt } from '@/composables/useTaskOrder'
 import type { Aria2Task, Aria2File, Aria2Peer } from '@shared/types'
 
 const props = defineProps<{
@@ -48,6 +68,45 @@ const props = defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const { t, locale } = useI18n()
+const preferenceStore = usePreferenceStore()
+const taskStore = useTaskStore()
+const historyStore = useHistoryStore()
+const message = useAppMessage()
+const taskRef = computed(() => props.task)
+
+const {
+  form: optForm,
+  canModify: optCanModify,
+  globalProxyAvailable: optGlobalProxyAvailable,
+  proxyAddress: optProxyAddress,
+  dirty: optDirty,
+  applying: optApplying,
+  applyOptions: optApplyFn,
+} = useTaskDetailOptions({
+  task: taskRef,
+  getTaskOption: (gid) => taskStore.getTaskOption(gid),
+  changeTaskOption: (payload) => taskStore.changeTaskOption(payload),
+  proxyConfig: () => preferenceStore.config.proxy,
+  message,
+  t,
+})
+
+const { detecting: detectingProxy, detect: detectProxy } = useSystemProxyDetect({
+  onSuccess(info) {
+    optForm.customProxy = info.server
+    message.success(t('preferences.proxy-detected-success'))
+  },
+  onSocks() {
+    message.warning(t('preferences.proxy-system-socks-rejected'))
+  },
+  onNotFound() {
+    message.info(t('preferences.proxy-system-not-detected'))
+  },
+  onError() {
+    message.error(t('preferences.proxy-system-detect-failed'))
+  },
+})
+
 const activeTab = ref('general')
 const slideDirection = ref<'left' | 'right'>('left')
 const prevTabIndex = ref(0)
@@ -57,16 +116,21 @@ interface TabDef {
   labelKey: string
   icon: typeof InformationCircleOutline
   btOnly?: boolean
+  ed2kOnly?: boolean
 }
 const allTabs: TabDef[] = [
   { key: 'general', labelKey: 'task.task-tab-general', icon: InformationCircleOutline },
   { key: 'activity', labelKey: 'task.task-tab-activity', icon: PulseOutline },
   { key: 'files', labelKey: 'task.task-tab-files', icon: DocumentOutline },
+  { key: 'options', labelKey: 'task.task-tab-options', icon: SettingsOutline },
+  { key: 'ed2k', labelKey: 'task.task-tab-ed2k', icon: ServerOutline, ed2kOnly: true },
   { key: 'peers', labelKey: 'task.task-tab-peers', icon: PeopleOutline, btOnly: true },
   { key: 'trackers', labelKey: 'task.task-tab-trackers', icon: ServerOutline, btOnly: true },
 ]
 
-const visibleTabs = computed(() => allTabs.filter((tab) => !tab.btOnly || isBT.value))
+const visibleTabs = computed(() =>
+  allTabs.filter((tab) => (!tab.btOnly || isBT.value) && (!tab.ed2kOnly || isED2K.value)),
+)
 
 function switchTab(key: string) {
   const oldIdx = visibleTabs.value.findIndex((t) => t.key === activeTab.value)
@@ -77,6 +141,7 @@ function switchTab(key: string) {
 }
 
 const isBT = computed(() => (props.task ? checkTaskIsBT(props.task) : false))
+const isED2K = computed(() => !!props.task?.ed2k)
 
 const prevTaskGid = ref('')
 watch(
@@ -96,7 +161,38 @@ const taskStatus = computed(() => {
   return translated !== `task.status-${key}` ? translated : key
 })
 const isActive = computed(() => props.task?.status === TASK_STATUS.ACTIVE)
-const taskFullName = computed(() => (props.task ? getTaskName(props.task, { defaultName: 'Unknown' }) : ''))
+const taskFullName = computed(() => (props.task ? getTaskDisplayName(props.task, { defaultName: 'Unknown' }) : ''))
+
+// ── Task date display ────────────────────────────────────────────────
+const taskAddedAt = computed(() => {
+  if (!props.task) return ''
+  const iso = getAddedAt(props.task.gid)
+  if (!iso) return ''
+  return localeDateTimeFormat(new Date(iso).getTime(), locale.value)
+})
+
+const taskCompletedAt = ref('')
+watch(
+  () => props.task?.gid,
+  async (gid) => {
+    if (!gid) {
+      taskCompletedAt.value = ''
+      return
+    }
+    try {
+      const record = await historyStore.getRecordByGid(gid)
+      if (record?.completed_at) {
+        taskCompletedAt.value = localeDateTimeFormat(new Date(record.completed_at).getTime(), locale.value)
+      } else {
+        taskCompletedAt.value = ''
+      }
+    } catch (e) {
+      logger.debug('TaskDetail.completedAt', `gid=${gid} query failed: ${e}`)
+      taskCompletedAt.value = ''
+    }
+  },
+  { immediate: true },
+)
 const percent = computed(() => (props.task ? calcProgress(props.task.totalLength, props.task.completedLength) : 0))
 
 const remaining = computed(() => {
@@ -131,6 +227,17 @@ const btInfo = computed(() => {
   return props.task.bittorrent
 })
 
+const ed2kInfo = computed(() => {
+  if (!isED2K.value || !props.task) return null
+  return props.task.ed2k
+})
+
+function yesNo(value?: boolean | string): string {
+  if (value === undefined || value === '') return '-'
+  const normalized = typeof value === 'boolean' ? value : value === 'true'
+  return normalized ? t('task.task-ed2k-yes') : t('task.task-ed2k-no')
+}
+
 const statusTagType = computed(() => {
   switch (taskStatusKey.value) {
     case 'active':
@@ -146,7 +253,7 @@ const statusTagType = computed(() => {
 
 const fileList = computed(() =>
   (props.files || []).map((item: Aria2File) => {
-    const name = getFileName(item.path)
+    const name = decodePathSegment(getFileName(item.path))
     return {
       idx: Number(item.index),
       name,
@@ -159,43 +266,86 @@ const fileList = computed(() =>
   }),
 )
 
-const fileColumns = computed(() => [
-  { title: '#', key: 'idx', width: 50 },
-  { title: t('task.file-name') || 'Name', key: 'name', ellipsis: { tooltip: true } },
-  { title: t('task.file-extension') || 'Ext', key: 'extension', width: 70 },
-  { title: '%', key: 'percent', width: 60, align: 'right' as const },
-  {
-    title: '✓',
-    key: 'completedLength',
-    width: 90,
-    align: 'right' as const,
-    render: (row: { completedLength: number }) => bytesToSize(String(row.completedLength)),
-  },
-  {
-    title: t('task.file-size') || 'Size',
-    key: 'length',
-    width: 90,
-    align: 'right' as const,
-    render: (row: { length: number }) => bytesToSize(String(row.length)),
-  },
-])
+const fileColumns = computed(() => {
+  const data = fileList.value
+  return [
+    {
+      title: t('task.file-index') || '#',
+      key: 'idx',
+      width: calcColumnWidth({
+        title: t('task.file-index') || '#',
+        values: data.map((r) => String(r.idx)),
+        sortable: true,
+      }),
+      sorter: (a: { idx: number }, b: { idx: number }) => a.idx - b.idx,
+    },
+    { title: t('task.file-name') || 'Name', key: 'name', ellipsis: { tooltip: true } },
+    {
+      title: t('task.file-extension') || 'Ext',
+      key: 'extension',
+      width: calcColumnWidth({
+        title: t('task.file-extension') || 'Ext',
+        values: data.map((r) => r.extension),
+      }),
+    },
+    {
+      title: t('task.task-peer-percent'),
+      key: 'percent',
+      width: calcColumnWidth({
+        title: t('task.task-peer-percent'),
+        values: data.map((r) => String(r.percent)),
+        sortable: true,
+      }),
+      align: 'right' as const,
+      sorter: (a: { percent: string }, b: { percent: string }) => parseFloat(a.percent) - parseFloat(b.percent),
+    },
+    {
+      title: t('task.file-completed'),
+      key: 'completedLength',
+      width: calcColumnWidth({
+        title: t('task.file-completed'),
+        values: data.map((r) => bytesToSize(String(r.completedLength))),
+        sortable: true,
+      }),
+      align: 'right' as const,
+      sorter: (a: { completedLength: number }, b: { completedLength: number }) => a.completedLength - b.completedLength,
+      render: (row: { completedLength: number }) => bytesToSize(String(row.completedLength)),
+    },
+    {
+      title: t('task.file-size') || 'Size',
+      key: 'length',
+      width: calcColumnWidth({
+        title: t('task.file-size') || 'Size',
+        values: data.map((r) => bytesToSize(String(r.length))),
+        sortable: true,
+      }),
+      align: 'right' as const,
+      sorter: (a: { length: number }, b: { length: number }) => a.length - b.length,
+      render: (row: { length: number }) => bytesToSize(String(row.length)),
+    },
+  ]
+})
 
 const peers = computed(() => {
   if (!props.task || !isBT.value) return []
   const p = props.task.peers
-  return (p || []).map((peer: Aria2Peer) => ({
-    host: `${peer.ip}:${peer.port}`,
-    client: peerIdParser(peer.peerId),
-    percent: peer.bitfield ? bitfieldToPercent(peer.bitfield) + '%' : '-',
-    uploadSpeed: bytesToSize(peer.uploadSpeed) + '/s',
-    downloadSpeed: bytesToSize(peer.downloadSpeed) + '/s',
-    amChoking: peer.amChoking === 'true',
-    peerChoking: peer.peerChoking === 'true',
-    seeder: peer.seeder === 'true',
-  }))
+  return (p || [])
+    .map((peer: Aria2Peer) => ({
+      host: `${peer.ip}:${peer.port}`,
+      client: peerIdParser(peer.peerId),
+      percent: peer.bitfield ? bitfieldToPercent(peer.bitfield) + '%' : '-',
+      uploadSpeed: bytesToSize(peer.uploadSpeed) + '/s',
+      downloadSpeed: bytesToSize(peer.downloadSpeed) + '/s',
+      amChoking: peer.amChoking === 'true',
+      peerChoking: peer.peerChoking === 'true',
+      seeder: peer.seeder === 'true',
+    }))
+    .sort((a, b) => a.host.localeCompare(b.host))
+    .map((row, i) => ({ ...row, index: i + 1 }))
 })
 
 interface PeerRow {
+  index: number
   host: string
   client: string
   percent: string
@@ -206,32 +356,121 @@ interface PeerRow {
   seeder: boolean
 }
 
-const peerColumns = computed(() => [
-  { title: t('task.task-peer-host'), key: 'host', minWidth: 140 },
-  { title: t('task.task-peer-client'), key: 'client', minWidth: 100, ellipsis: { tooltip: true } },
-  { title: '%', key: 'percent', width: 55, align: 'right' as const },
-  { title: '↓', key: 'downloadSpeed', width: 90, align: 'right' as const },
-  { title: '↑', key: 'uploadSpeed', width: 90, align: 'right' as const },
-  {
-    title: t('task.task-peer-flags'),
-    key: 'flags',
-    width: 60,
-    align: 'center' as const,
-    render: (row: PeerRow) => {
-      const flags: string[] = []
-      if (!row.amChoking) flags.push('D')
-      if (!row.peerChoking) flags.push('U')
-      return flags.join('') || '—'
+// ── GeoIP: peer country flag resolution ──────────────────────────────
+const geoCache = ref<Record<string, GeoInfo>>({})
+
+watch(
+  peers,
+  async (list) => {
+    const uniqueIps = [...new Set(list.map((p) => p.host.split(':')[0]))]
+    if (uniqueIps.length === 0) {
+      geoCache.value = {}
+      return
+    }
+    try {
+      geoCache.value = await lookupPeerIps(uniqueIps, locale.value)
+    } catch (e) {
+      logger.debug('TaskDetail.geoip', `lookupPeerIps failed: ${e}`)
+    }
+  },
+  { immediate: true },
+)
+
+const peerColumns = computed(() => {
+  const data = peers.value
+  return [
+    {
+      title: t('task.task-tracker-tier'),
+      key: 'index',
+      width: 64,
+      align: 'center' as const,
+      sorter: (a: PeerRow, b: PeerRow) => a.index - b.index,
+      defaultSortOrder: 'ascend' as const,
+      render: (row: PeerRow) => {
+        const ip = row.host.split(':')[0]
+        const geo = geoCache.value[ip]
+        if (!geo) return String(row.index)
+        const flag = countryCodeToFlag(geo.country_code)
+        const label = `${geo.country_name} · ${geo.continent}`
+        return h(
+          NTooltip,
+          { delay: 500, placement: 'right' },
+          {
+            trigger: () => h('span', { style: 'cursor: default' }, [String(row.index), ' ', flag]),
+            default: () => label,
+          },
+        )
+      },
     },
-  },
-  {
-    title: 'S',
-    key: 'seeder',
-    width: 45,
-    align: 'center' as const,
-    render: (row: PeerRow) => (row.seeder ? '✓' : ''),
-  },
-])
+    { title: t('task.task-peer-host'), key: 'host', minWidth: 140 },
+    {
+      title: t('task.task-peer-client'),
+      key: 'client',
+      minWidth: 100,
+      render: (row: PeerRow) => h(NEllipsis, null, { default: () => row.client }),
+    },
+    {
+      title: t('task.task-peer-percent'),
+      key: 'percent',
+      width: calcColumnWidth({
+        title: t('task.task-peer-percent'),
+        values: data.map((r) => r.percent),
+        sortable: true,
+      }),
+      align: 'right' as const,
+      sorter: (a: PeerRow, b: PeerRow) => parseFloat(a.percent) - parseFloat(b.percent),
+    },
+    {
+      title: t('task.task-peer-download-speed'),
+      key: 'downloadSpeed',
+      width: calcColumnWidth({
+        title: t('task.task-peer-download-speed'),
+        values: data.map((r) => r.downloadSpeed),
+        sortable: true,
+      }),
+      align: 'right' as const,
+      sorter: (a: PeerRow, b: PeerRow) => parseFloat(a.downloadSpeed) - parseFloat(b.downloadSpeed),
+    },
+    {
+      title: t('task.task-peer-upload-speed'),
+      key: 'uploadSpeed',
+      width: calcColumnWidth({
+        title: t('task.task-peer-upload-speed'),
+        values: data.map((r) => r.uploadSpeed),
+        sortable: true,
+      }),
+      align: 'right' as const,
+      sorter: (a: PeerRow, b: PeerRow) => parseFloat(a.uploadSpeed) - parseFloat(b.uploadSpeed),
+    },
+    {
+      title: t('task.task-peer-flags'),
+      key: 'flags',
+      width: calcColumnWidth({
+        title: t('task.task-peer-flags'),
+        values: ['DU', 'D', 'U', '—'],
+      }),
+      align: 'center' as const,
+      render: (row: PeerRow) => {
+        const flags: string[] = []
+        if (!row.amChoking) flags.push('D')
+        if (!row.peerChoking) flags.push('U')
+        return flags.join('') || '—'
+      },
+    },
+    {
+      title: t('task.task-peer-seeder'),
+      key: 'seeder',
+      width: calcColumnWidth({
+        title: t('task.task-peer-seeder'),
+        values: ['✓'],
+        sortable: true,
+      }),
+      align: 'center' as const,
+      sorter: (a: PeerRow, b: PeerRow) => Number(b.seeder) - Number(a.seeder),
+      render: (row: PeerRow) => (row.seeder ? '✓' : ''),
+    },
+  ]
+})
 
 const {
   statuses: trackerStatuses,
@@ -249,28 +488,61 @@ const trackerRows = computed((): TrackerRow[] => {
   }))
 })
 
-const trackerColumns = computed(() => [
-  { title: t('task.task-tracker-tier'), key: 'tier', width: 55, align: 'center' as const },
-  { title: 'URL', key: 'url', ellipsis: { tooltip: true } },
-  { title: t('task.task-tracker-protocol'), key: 'protocol', width: 75, align: 'center' as const },
-  {
-    title: t('task.task-tracker-status'),
-    key: 'status',
-    width: 100,
-    align: 'center' as const,
-    render: (row: TrackerRow) =>
-      h(
-        NTag,
-        {
-          type: row.status === 'online' ? 'success' : row.status === 'offline' ? 'error' : 'default',
-          size: 'small',
-          round: true,
-          style: 'transition: all 0.3s cubic-bezier(0.05, 0.7, 0.1, 1)',
-        },
-        () => t(`task.task-tracker-${row.status}`),
-      ),
-  },
-])
+/** Sort-order mapping for tracker status: lower = higher priority. */
+const TRACKER_STATUS_ORDER: Record<string, number> = { online: 0, checking: 1, unknown: 2, offline: 3 }
+
+const trackerColumns = computed(() => {
+  const data = trackerRows.value
+  return [
+    {
+      title: t('task.task-tracker-tier'),
+      key: 'tier',
+      width: calcColumnWidth({
+        title: t('task.task-tracker-tier'),
+        values: data.map((r) => String(r.tier)),
+        sortable: true,
+      }),
+      align: 'center' as const,
+      sorter: (a: TrackerRow, b: TrackerRow) => a.tier - b.tier,
+    },
+    { title: 'URL', key: 'url', ellipsis: { tooltip: true } },
+    {
+      title: t('task.task-tracker-protocol'),
+      key: 'protocol',
+      width: calcColumnWidth({
+        title: t('task.task-tracker-protocol'),
+        values: data.map((r) => r.protocol),
+        sortable: true,
+      }),
+      align: 'center' as const,
+      sorter: 'default' as const,
+    },
+    {
+      title: t('task.task-tracker-status'),
+      key: 'status',
+      width: calcColumnWidth({
+        title: t('task.task-tracker-status'),
+        values: ['online', 'offline', 'checking', 'unknown'].map((s) => t(`task.task-tracker-${s}`)),
+        sortable: true,
+        extraWidth: 20,
+      }),
+      align: 'center' as const,
+      sorter: (a: TrackerRow, b: TrackerRow) =>
+        (TRACKER_STATUS_ORDER[a.status] ?? 2) - (TRACKER_STATUS_ORDER[b.status] ?? 2),
+      render: (row: TrackerRow) =>
+        h(
+          NTag,
+          {
+            type: row.status === 'online' ? 'success' : row.status === 'offline' ? 'error' : 'default',
+            size: 'small',
+            round: true,
+            style: 'transition: all 0.3s cubic-bezier(0.05, 0.7, 0.1, 1)',
+          },
+          () => t(`task.task-tracker-${row.status}`),
+        ),
+    },
+  ]
+})
 
 function handleProbeTrackers() {
   if (trackerProbing.value) {
@@ -308,7 +580,7 @@ function handleClose() {
           @click="switchTab(tab.key)"
         >
           <NIcon :size="16"><component :is="tab.icon" /></NIcon>
-          <span class="detail-tab-label">{{ t(tab.labelKey) }}</span>
+          <span class="detail-tab-label">{{ tab.key === 'ed2k' ? t('task.task-tab-ed2k') : t(tab.labelKey) }}</span>
         </button>
       </div>
 
@@ -335,6 +607,12 @@ function handleClose() {
                 >
                   {{ task.errorCode }} {{ task.errorMessage }}
                 </NDescriptionsItem>
+                <NDescriptionsItem v-if="taskAddedAt" :label="t('task.task-added-at') || 'Added At'">
+                  {{ taskAddedAt }}
+                </NDescriptionsItem>
+                <NDescriptionsItem v-if="taskCompletedAt" :label="t('task.task-completed-at') || 'Completed At'">
+                  {{ taskCompletedAt }}
+                </NDescriptionsItem>
               </NDescriptions>
               <template v-if="isBT && btInfo">
                 <div class="section-divider">BitTorrent</div>
@@ -360,6 +638,24 @@ function handleClose() {
                   </NDescriptionsItem>
                   <NDescriptionsItem v-if="btInfo?.comment" :label="t('task.task-bittorrent-comment') || 'Comment'">
                     {{ btInfo.comment }}
+                  </NDescriptionsItem>
+                </NDescriptions>
+              </template>
+              <template v-if="isED2K && ed2kInfo">
+                <div class="section-divider">ED2K</div>
+                <NDescriptions
+                  :column="1"
+                  label-placement="left"
+                  bordered
+                  size="small"
+                  :label-style="{ width: '1px', whiteSpace: 'nowrap' }"
+                >
+                  <NDescriptionsItem :label="t('task.task-ed2k-hash')">{{ ed2kInfo.hash || '-' }}</NDescriptionsItem>
+                  <NDescriptionsItem :label="t('task.task-ed2k-server-count')">
+                    {{ ed2kInfo.connectedServerCount || 0 }} / {{ ed2kInfo.serverCount || 0 }}
+                  </NDescriptionsItem>
+                  <NDescriptionsItem :label="t('task.task-ed2k-peer-count')">
+                    {{ ed2kInfo.peerCount || 0 }}
                   </NDescriptionsItem>
                 </NDescriptions>
               </template>
@@ -412,6 +708,180 @@ function handleClose() {
               virtual-scroll
               striped
             />
+          </div>
+
+          <div v-else-if="activeTab === 'options'" key="options" class="tab-content">
+            <div class="options-form">
+              <NFormItem :label="t('task.task-user-agent') + ':'">
+                <NInput
+                  v-model:value="optForm.userAgent"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 3 }"
+                  :readonly="!optCanModify"
+                  :placeholder="t('task.task-user-agent-placeholder') || ''"
+                />
+              </NFormItem>
+              <NFormItem :label="t('task.task-authorization') + ':'">
+                <NInput
+                  v-model:value="optForm.authorization"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 3 }"
+                  :readonly="!optCanModify"
+                  :placeholder="t('task.task-authorization-placeholder') || ''"
+                />
+              </NFormItem>
+              <NFormItem :label="t('task.task-http-auth') + ':'">
+                <div class="http-auth-fields">
+                  <NInput
+                    v-model:value="optForm.httpAuthUsername"
+                    :readonly="!optCanModify"
+                    :placeholder="t('task.task-http-auth-username-placeholder') || ''"
+                  />
+                  <NInput
+                    v-model:value="optForm.httpAuthPassword"
+                    type="password"
+                    show-password-on="click"
+                    :readonly="!optCanModify"
+                    :placeholder="t('task.task-http-auth-password-placeholder') || ''"
+                  />
+                </div>
+              </NFormItem>
+              <NFormItem :label="t('task.task-referer') + ':'">
+                <NInput
+                  v-model:value="optForm.referer"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 3 }"
+                  :readonly="!optCanModify"
+                  :placeholder="t('task.task-referer-placeholder') || ''"
+                />
+              </NFormItem>
+              <NFormItem :label="t('task.task-cookie') + ':'">
+                <NInput
+                  v-model:value="optForm.cookie"
+                  type="textarea"
+                  :autosize="{ minRows: 1, maxRows: 3 }"
+                  :readonly="!optCanModify"
+                  :placeholder="t('task.task-cookie-placeholder') || ''"
+                />
+              </NFormItem>
+              <NFormItem :label="t('task.task-proxy-label') + ':'">
+                <div class="proxy-radio-group">
+                  <NRadioGroup v-model:value="optForm.proxyMode" :disabled="!optCanModify" name="task-proxy-mode">
+                    <NRadio value="none">{{ t('task.proxy-mode-none') }}</NRadio>
+                    <NRadio v-if="optGlobalProxyAvailable" value="global">
+                      {{ t('task.proxy-mode-global') }}
+                    </NRadio>
+                    <NRadio value="custom">{{ t('task.proxy-mode-custom') }}</NRadio>
+                  </NRadioGroup>
+                  <div
+                    class="proxy-hint-collapse"
+                    :class="{ 'proxy-hint-collapse--open': optForm.proxyMode === 'global' }"
+                  >
+                    <div class="proxy-hint-collapse__inner">
+                      <div class="proxy-server-hint">{{ t('task.proxy-global-server') }} {{ optProxyAddress }}</div>
+                    </div>
+                  </div>
+                  <NCollapseTransition :show="optForm.proxyMode === 'custom'">
+                    <div class="custom-proxy-input">
+                      <NInput
+                        v-model:value="optForm.customProxy"
+                        :readonly="!optCanModify"
+                        :placeholder="'http://host:port'"
+                      />
+                      <NButton :loading="detectingProxy" :disabled="!optCanModify" size="small" @click="detectProxy">
+                        <template #icon>
+                          <NIcon><SearchOutline /></NIcon>
+                        </template>
+                        {{ t('preferences.detect-system-proxy') }}
+                      </NButton>
+                    </div>
+                  </NCollapseTransition>
+                </div>
+              </NFormItem>
+              <div v-if="optCanModify" class="options-apply-bar">
+                <NButton
+                  :type="optDirty ? 'primary' : 'default'"
+                  :disabled="!optDirty"
+                  :loading="optApplying"
+                  class="apply-btn"
+                  @click="optApplyFn"
+                >
+                  {{ optDirty ? t('task.apply-changes') : t('task.no-changes') }}
+                </NButton>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="activeTab === 'ed2k'" key="ed2k" class="tab-content">
+            <template v-if="ed2kInfo">
+              <NDescriptions
+                :column="1"
+                label-placement="left"
+                bordered
+                size="small"
+                :label-style="{ width: '1px', whiteSpace: 'nowrap' }"
+              >
+                <NDescriptionsItem :label="t('task.task-ed2k-hash')">{{ ed2kInfo.hash || '-' }}</NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-name')">{{ ed2kInfo.name || taskFullName }}</NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-file-size')">
+                  {{ ed2kInfo.length ? bytesToSize(ed2kInfo.length) : bytesToSize(task?.totalLength || '0') }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-part-hash-count')">
+                  {{ ed2kInfo.partHashCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-aich-root')">
+                  {{ ed2kInfo.aichRoot || '-' }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-server-count')">
+                  {{ ed2kInfo.connectedServerCount || 0 }} / {{ ed2kInfo.serverCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-peer-count')">
+                  {{ ed2kInfo.peerCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-queued-peer-count')">
+                  {{ ed2kInfo.queuedPeerCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-accepted-peer-count')">
+                  {{ ed2kInfo.acceptedPeerCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-dead-peer-count')">
+                  {{ ed2kInfo.deadPeerCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-kad-node-count')">
+                  {{ ed2kInfo.kadNodeCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-kad-router-count')">
+                  {{ ed2kInfo.kadRouterCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-kad-firewalled')">
+                  {{ yesNo(ed2kInfo.kadFirewalled) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-kad-observed-address-count')">
+                  {{ ed2kInfo.kadObservedAddressCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-search-active')">
+                  {{ yesNo(ed2kInfo.searchActive) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-search-more-results')">
+                  {{ yesNo(ed2kInfo.searchMoreResults) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-search-result-count')">
+                  {{ ed2kInfo.searchResultCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-shared-file-count')">
+                  {{ ed2kInfo.sharedFileCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-uploading-peer-count')">
+                  {{ ed2kInfo.uploadingPeerCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-waiting-upload-peer-count')">
+                  {{ ed2kInfo.waitingUploadPeerCount || 0 }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-peer-credit-count')">
+                  {{ ed2kInfo.peerCreditCount || 0 }}
+                </NDescriptionsItem>
+              </NDescriptions>
+            </template>
           </div>
 
           <div v-else-if="activeTab === 'peers'" key="peers" class="tab-content">
@@ -483,12 +953,12 @@ function handleClose() {
 }
 
 .detail-tab:hover {
-  color: var(--primary-color, #e0a422);
+  color: var(--color-primary);
 }
 
 .detail-tab.active {
-  color: var(--primary-color, #e0a422);
-  border-bottom-color: var(--primary-color, #e0a422);
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
 }
 
 .tab-content-wrapper {
@@ -504,7 +974,7 @@ function handleClose() {
   margin: 20px 0 12px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--primary-color, #e0a422);
+  color: var(--color-primary);
   letter-spacing: 0.5px;
 }
 
@@ -591,5 +1061,68 @@ function handleClose() {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* ── Options tab ─────────────────────────────────────────────────── */
+.options-form {
+  padding: 4px 0;
+}
+.options-apply-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}
+.apply-btn {
+  transition:
+    background-color 0.25s cubic-bezier(0.2, 0, 0, 1),
+    border-color 0.25s cubic-bezier(0.2, 0, 0, 1),
+    color 0.25s cubic-bezier(0.2, 0, 0, 1),
+    opacity 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+.proxy-radio-group {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+.custom-proxy-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  margin-left: 24px;
+}
+.custom-proxy-input .n-button {
+  align-self: flex-start;
+}
+.http-auth-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.proxy-hint-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+}
+.proxy-hint-collapse--open {
+  grid-template-rows: 1fr;
+}
+.proxy-hint-collapse__inner {
+  overflow: hidden;
+}
+.proxy-server-hint {
+  font-size: var(--font-size-sm);
+  color: var(--n-text-color-3, #999);
+  opacity: 0.8;
+  user-select: all;
+  padding: 4px 0 2px;
+}
+
+/* Allow table header text to wrap instead of truncating with "…"
+   when the column is too narrow for the translated label. */
+:deep(.n-data-table-th__title) {
+  white-space: normal;
+  word-break: break-word;
 }
 </style>

@@ -10,7 +10,7 @@
  *   5. Ignore tasks with errorCode '0' (not a real error).
  */
 import { describe, it, expect, vi } from 'vitest'
-import { createTaskNotifier } from '../taskNotifications'
+import { createTaskNotifier } from '../task/notifications'
 import type { Aria2Task, TaskStatus } from '@shared/types'
 
 const makeMockTask = (gid: string, status: TaskStatus = 'active', extra: Partial<Aria2Task> = {}): Aria2Task => ({
@@ -174,6 +174,119 @@ describe('createTaskNotifier', () => {
 
     expect(onError).toHaveBeenCalledTimes(1)
     expect(onComplete).toHaveBeenCalledTimes(1)
+  })
+
+  // ── BT seeding restoration ───────────────────────────────────
+
+  it('does not fire onBtComplete when a restored complete BT task reports seeder later', () => {
+    const onBtComplete = vi.fn()
+    const notifier = createTaskNotifier()
+
+    notifier.scanTasks(
+      [
+        makeMockTask('bt1', 'active', {
+          bittorrent: { info: { name: 'Ubuntu.iso' } },
+          infoHash: 'same-info-hash',
+          completedLength: '1000',
+          totalLength: '1000',
+          seeder: 'false',
+        }),
+      ],
+      { onBtComplete },
+    )
+
+    notifier.scanTasks(
+      [
+        makeMockTask('bt2', 'active', {
+          bittorrent: { info: { name: 'Ubuntu.iso' } },
+          infoHash: 'same-info-hash',
+          completedLength: '1000',
+          totalLength: '1000',
+          seeder: 'true',
+        }),
+      ],
+      { onBtComplete },
+    )
+
+    expect(onBtComplete).not.toHaveBeenCalled()
+  })
+
+  it('does not fire onBtComplete when a restored BT task starts as zero length', () => {
+    const onBtComplete = vi.fn()
+    const notifier = createTaskNotifier()
+
+    notifier.scanTasks(
+      [
+        makeMockTask('bt1', 'active', {
+          bittorrent: { info: { name: 'Ubuntu.iso' } },
+          completedLength: '0',
+          totalLength: '0',
+          seeder: 'false',
+        }),
+      ],
+      { onBtComplete },
+    )
+
+    notifier.scanTasks(
+      [
+        makeMockTask('bt1', 'active', {
+          bittorrent: { info: { name: 'Ubuntu.iso' } },
+          infoHash: 'hydrated-info-hash',
+          completedLength: '1000',
+          totalLength: '1000',
+          seeder: 'true',
+        }),
+      ],
+      { onBtComplete },
+    )
+
+    expect(onBtComplete).not.toHaveBeenCalled()
+  })
+
+  it('fires onBtComplete when a non-restored BT download enters seeding', () => {
+    const onBtComplete = vi.fn()
+    const notifier = createTaskNotifier()
+
+    notifier.scanTasks([], { onBtComplete })
+
+    notifier.scanTasks(
+      [
+        makeMockTask('bt1', 'active', {
+          bittorrent: { info: { name: 'Ubuntu.iso' } },
+          completedLength: '500',
+          totalLength: '1000',
+          seeder: 'false',
+        }),
+      ],
+      { onBtComplete },
+    )
+
+    notifier.scanTasks(
+      [
+        makeMockTask('bt1', 'active', {
+          bittorrent: { info: { name: 'Ubuntu.iso' } },
+          completedLength: '500',
+          totalLength: '1000',
+          seeder: 'false',
+        }),
+      ],
+      { onBtComplete },
+    )
+
+    notifier.scanTasks(
+      [
+        makeMockTask('bt1', 'active', {
+          bittorrent: { info: { name: 'Ubuntu.iso' } },
+          completedLength: '1000',
+          totalLength: '1000',
+          seeder: 'true',
+        }),
+      ],
+      { onBtComplete },
+    )
+
+    expect(onBtComplete).toHaveBeenCalledTimes(1)
+    expect(onBtComplete).toHaveBeenCalledWith(expect.objectContaining({ gid: 'bt1' }))
   })
 
   // ── Optional callbacks ────────────────────────────────────

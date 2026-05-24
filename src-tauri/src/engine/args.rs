@@ -1,8 +1,8 @@
-/// Builds the CLI argument list for spawning the aria2c sidecar process.
+/// Builds the CLI argument list for spawning the bundled Motrix Next engine sidecar.
 ///
-/// Whitelists only valid aria2c options from the config object, enforces
-/// security rules (e.g., `--rpc-listen-all=false`), and handles the
-/// `keep-seeding` app-level flag.
+/// Whitelists only valid aria2c options from the config object and handles
+/// the `keep-seeding` app-level flag. Options managed exclusively by
+/// `aria2.conf` are excluded from the whitelist to prevent store overrides.
 pub(crate) fn build_start_args(
     config: &serde_json::Value,
     conf_path: Option<&str>,
@@ -30,28 +30,18 @@ pub(crate) fn build_start_args(
         "allow-overwrite",
         "allow-piece-length-change",
         "always-resume",
-        "async-dns",
         "auto-file-renaming",
         "bt-enable-hook-after-hash-check",
         "bt-enable-lpd",
         "bt-exclude-tracker",
         "bt-external-ip",
         "bt-force-encryption",
-        "bt-hash-check-seed",
-        "bt-load-saved-metadata",
         "bt-max-peers",
-        "bt-metadata-only",
         "bt-min-crypto-level",
-        "bt-prioritize-piece",
-        "bt-remove-unselected-file",
         "bt-request-peer-speed-limit",
         "bt-require-crypto",
-        "bt-save-metadata",
-        "bt-seed-unverified",
         "bt-stop-timeout",
-        "bt-tracker-connect-timeout",
         "bt-tracker-interval",
-        "bt-tracker-timeout",
         "bt-tracker",
         "check-integrity",
         "checksum",
@@ -64,29 +54,30 @@ pub(crate) fn build_start_args(
         "dht-listen-port",
         "dir",
         "dry-run",
+        "ed2k-listen-port",
+        "ed2k-node-list",
+        "ed2k-server",
+        "ed2k-server-list",
+        "ed2k-share-file",
+        "ed2k-upload-slots",
         "enable-dht",
         "enable-http-keep-alive",
         "enable-http-pipelining",
         "enable-mmap",
         "enable-peer-exchange",
         "file-allocation",
-        "follow-metalink",
-        "follow-torrent",
-        "force-save",
         "force-sequential",
         "ftp-passwd",
         "ftp-pasv",
         "ftp-proxy-passwd",
         "ftp-proxy-user",
         "ftp-proxy",
-        "ftp-reuse-connection",
         "ftp-type",
         "ftp-user",
         "gid",
         "hash-check-only",
         "header",
         "http-accept-gzip",
-        "http-auth-challenge",
         "http-no-cache",
         "http-passwd",
         "http-proxy-passwd",
@@ -134,7 +125,6 @@ pub(crate) fn build_start_args(
         "seed-time",
         "select-file",
         "split",
-        "ssh-host-key-md",
         "stream-piece-selector",
         "timeout",
         "uri-selector",
@@ -160,11 +150,6 @@ pub(crate) fn build_start_args(
                 continue;
             }
 
-            // Security: always force rpc-listen-all=false
-            if key == "rpc-listen-all" {
-                continue;
-            }
-
             // Handle keep-seeding: skip seed-time if keep_seeding is true
             if keep_seeding && key == "seed-time" {
                 continue;
@@ -182,6 +167,17 @@ pub(crate) fn build_start_args(
                 continue;
             }
 
+            // Defensive: skip SOCKS proxy values that aria2 cannot handle.
+            // aria2's HttpProxyOptionHandler only accepts http/https/ftp schemes;
+            // socks4/socks5 URIs cause errorCode=28 and crash the engine.
+            if key == "all-proxy" && val_str.to_ascii_lowercase().starts_with("socks") {
+                log::warn!(
+                    "Skipping unsupported proxy protocol for --all-proxy: {}",
+                    val_str
+                );
+                continue;
+            }
+
             // Handle keep-seeding: override seed-ratio to 0
             if keep_seeding && key == "seed-ratio" {
                 args.push("--seed-ratio=0".to_string());
@@ -195,11 +191,9 @@ pub(crate) fn build_start_args(
     // If no conf file, ensure RPC is enabled
     if conf_path.is_none() {
         args.push("--enable-rpc=true".to_string());
+        args.push("--rpc-listen-all=true".to_string());
         args.push("--rpc-allow-origin-all=true".to_string());
     }
-
-    // Security: only listen on localhost
-    args.push("--rpc-listen-all=false".to_string());
 
     args
 }
@@ -226,16 +220,16 @@ mod tests {
     }
 
     #[test]
-    fn build_args_forces_rpc_listen_all_false() {
-        let config = json!({ "rpc-listen-all": "true" });
+    fn build_args_excludes_removed_engine_keys() {
+        let config = json!({
+            "bt-save-metadata": "false",
+            "bt-load-saved-metadata": "false",
+            "bt-seed-unverified": "false"
+        });
         let args = build_start_args(&config, None, "/tmp/s.session", false);
-        // Must NOT pass the user's rpc-listen-all=true
-        let rpc_args: Vec<_> = args
-            .iter()
-            .filter(|a| a.contains("rpc-listen-all"))
-            .collect();
-        assert_eq!(rpc_args.len(), 1);
-        assert_eq!(rpc_args[0], "--rpc-listen-all=false");
+        assert!(!args.iter().any(|a| a.contains("bt-save-metadata")));
+        assert!(!args.iter().any(|a| a.contains("bt-load-saved-metadata")));
+        assert!(!args.iter().any(|a| a.contains("bt-seed-unverified")));
     }
 
     #[test]
@@ -283,7 +277,15 @@ mod tests {
     fn build_args_enables_rpc_without_conf() {
         let args = build_start_args(&json!({}), None, "/tmp/s.session", false);
         assert!(args.iter().any(|a| a == "--enable-rpc=true"));
+        assert!(args.iter().any(|a| a == "--rpc-listen-all=true"));
         assert!(args.iter().any(|a| a == "--rpc-allow-origin-all=true"));
+    }
+
+    #[test]
+    fn bundled_conf_allows_remote_rpc_by_default() {
+        const BUNDLED_CONF: &str = include_str!("../../binaries/aria2.conf");
+        assert!(BUNDLED_CONF.contains("rpc-listen-all=true"));
+        assert!(BUNDLED_CONF.contains("rpc-allow-origin-all=true"));
     }
 
     #[test]
@@ -346,18 +348,82 @@ mod tests {
     }
 
     #[test]
-    fn build_args_always_appends_rpc_listen_all_false() {
-        // Even with no config, security enforcement must be present
-        let args = build_start_args(&json!({}), None, "/tmp/s", false);
-        assert!(args.iter().any(|a| a == "--rpc-listen-all=false"));
-    }
-
-    #[test]
     fn build_args_null_and_array_values_skipped() {
         let config = json!({ "dir": null, "header": ["X-Custom: val"] });
         let args = build_start_args(&config, None, "/tmp/s", false);
         assert!(!args.iter().any(|a| a.contains("--dir=")));
         // Arrays are not handled by the match — skipped via `_ => continue`
         assert!(!args.iter().any(|a| a.contains("--header=")));
+    }
+
+    #[test]
+    fn build_args_force_save_rejected_from_cli() {
+        // force-save is now per-download only (set via RPC addTorrent).
+        // It must NOT be passed as a CLI arg — doing so makes it the global
+        // default for ALL downloads, causing completed HTTP tasks to persist
+        // in the session file and re-download on restart.
+        // See: aria2 SessionSerializer.cc:288
+        let config = json!({ "force-save": true });
+        let args = build_start_args(&config, None, "/tmp/s", false);
+        assert!(!args.iter().any(|a| a.contains("force-save")));
+    }
+
+    #[test]
+    fn build_args_force_save_string_also_rejected() {
+        let config = json!({ "force-save": "true" });
+        let args = build_start_args(&config, None, "/tmp/s", false);
+        assert!(!args.iter().any(|a| a.contains("force-save")));
+    }
+
+    #[test]
+    fn build_args_skips_socks5_proxy() {
+        let config = json!({ "all-proxy": "socks5://127.0.0.1:1080", "dir": "/tmp" });
+        let args = build_start_args(&config, None, "/tmp/s", false);
+        assert!(
+            !args.iter().any(|a| a.contains("all-proxy")),
+            "socks5 proxy should be filtered out"
+        );
+        assert!(args.iter().any(|a| a == "--dir=/tmp"));
+    }
+
+    #[test]
+    fn build_args_skips_socks4_proxy() {
+        let config = json!({ "all-proxy": "socks4://127.0.0.1:1080" });
+        let args = build_start_args(&config, None, "/tmp/s", false);
+        assert!(
+            !args.iter().any(|a| a.contains("all-proxy")),
+            "socks4 proxy should be filtered out"
+        );
+    }
+
+    #[test]
+    fn build_args_skips_socks5h_proxy() {
+        let config = json!({ "all-proxy": "SOCKS5://127.0.0.1:1080" });
+        let args = build_start_args(&config, None, "/tmp/s", false);
+        assert!(
+            !args.iter().any(|a| a.contains("all-proxy")),
+            "SOCKS5 (uppercase) should be filtered out"
+        );
+    }
+
+    #[test]
+    fn build_args_passes_http_proxy() {
+        let config = json!({ "all-proxy": "http://127.0.0.1:8080" });
+        let args = build_start_args(&config, None, "/tmp/s", false);
+        assert!(
+            args.iter()
+                .any(|a| a == "--all-proxy=http://127.0.0.1:8080"),
+            "HTTP proxy should pass through"
+        );
+    }
+
+    #[test]
+    fn build_args_passes_bare_host_port_proxy() {
+        let config = json!({ "all-proxy": "127.0.0.1:8080" });
+        let args = build_start_args(&config, None, "/tmp/s", false);
+        assert!(
+            args.iter().any(|a| a == "--all-proxy=127.0.0.1:8080"),
+            "Bare HOST:PORT proxy should pass through"
+        );
     }
 }
