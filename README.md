@@ -13,6 +13,10 @@
 [![Website](https://img.shields.io/badge/Website-E0A422?style=for-the-badge&logo=safari&logoColor=white)](https://motrix-next.pages.dev)
 [![Browser Extension](https://img.shields.io/badge/Extension-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white)](https://github.com/AnInsomniacy/motrix-next-extension)
 
+<a href="https://trendshift.io/repositories/24525">
+  <img src="https://trendshift.io/api/badge/repositories/24525" alt="AnInsomniacy/motrix-next on Trendshift" width="250" height="55" />
+</a>
+
 </div>
 
 ---
@@ -65,7 +69,7 @@ What changed is everything underneath. Every transition and micro-interaction ha
 
 ## Features
 
-- **Multi-protocol downloads** — HTTP, FTP, ED2K, BitTorrent, Magnet, `.torrent`, and Metalink tasks
+- **Multi-protocol downloads** — HTTP, FTP, ED2K, BitTorrent, Magnet, and `.torrent` tasks
 - **BitTorrent** — Selective file download, DHT, peer exchange, encryption controls, metadata caching, GeoIP peer flags, and tracker probing
 - **Browser extension integration** — Embedded Extension API with independent authentication, download confirmation, smart auto-submit, filename hints, referer/cookie forwarding, and real-time controls ([Chrome Web Store](https://chromewebstore.google.com/detail/ofeajdebdjajhkmcmamagokecnbephhl) · [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/loojjolhejmakcdlbidigoniobfanjlb))
 - **Safe filename handling** — Content-Disposition, RFC 2047, non-UTF-8, percent-encoded, and extensionless URL resolution with path traversal sanitization
@@ -108,6 +112,13 @@ The `.app.tar.gz` macOS artifacts are published for the Tauri updater and Homebr
 > If macOS says the app is **"damaged and can't be opened"**, see the [FAQ below](#faq).
 
 ### Windows
+
+**Scoop (recommended):**
+
+```bash
+scoop bucket add extras
+scoop install extras/motrix-next
+```
 
 Download the installer from [Releases](https://github.com/AnInsomniacy/motrix-next/releases):
 

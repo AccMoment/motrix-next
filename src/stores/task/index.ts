@@ -1,7 +1,7 @@
 /** @fileoverview Pinia store for download task management: list, add, pause, resume, remove. */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { EMPTY_STRING } from '@shared/constants'
+import { EMPTY_STRING, TASK_STATUS } from '@shared/constants'
 import { checkTaskIsEd2kSearch, intersection } from '@shared/utils'
 import { logger } from '@shared/logger'
 import type { Aria2Task, Aria2File, Aria2Peer, Aria2EngineOptions, TaskApi } from '@shared/types'
@@ -15,7 +15,16 @@ import {
   loadAddedAtFromRecords,
   buildSortableAddedAtMap,
 } from '@/composables/useTaskOrder'
-import { sortTasks, sortRecords } from '@/composables/useTaskSort'
+import {
+  applyManualOrder,
+  createManualOrderSnapshot,
+  sortTasks,
+  sortRecords,
+  type ActiveSortField,
+  type AllSortField,
+  type SortDirection,
+  type StoppedSortField,
+} from '@/composables/useTaskSort'
 import { DEFAULT_TASK_SORT } from '@/composables/useTaskSort'
 import { useHistoryStore } from '@/stores/history'
 import { useHttpAuthStore } from '@/stores/httpAuth'
@@ -34,7 +43,7 @@ export const useTaskStore = defineStore('task', () => {
   const currentTaskItem = ref<Aria2Task | null>(null)
   const currentTaskFiles = ref<Aria2File[]>([])
   const currentTaskPeers = ref<Aria2Peer[]>([])
-  const seedingList = ref<string[]>([])
+  const sharingList = ref<string[]>([])
   const taskList = ref<Aria2Task[]>([])
   const selectedGidList = ref<string[]>([])
 
@@ -80,7 +89,13 @@ export const useTaskStore = defineStore('task', () => {
         const historyStore = useHistoryStore()
         const records = await historyStore.getRecords()
         const { field, direction } = sortConfig.stopped
-        sortRecords(records, field, direction)
+        if (field === 'manual') {
+          applyManualOrder(records, usePreferenceStore().config.taskManualOrder.stopped, (fresh) => {
+            sortRecords(fresh, 'added-at', 'desc')
+          })
+        } else {
+          sortRecords(records, field, direction)
+        }
         data = records.map(historyRecordToTask)
       } else if (currentList.value === 'all') {
         const ALL_STOPPED_LIMIT = 128
@@ -116,7 +131,13 @@ export const useTaskStore = defineStore('task', () => {
 
         const addedAtIndex = buildSortableAddedAtMap(data, historyRecords)
         const { field, direction } = sortConfig.all
-        sortTasks(data, field, direction, addedAtIndex)
+        if (field === 'manual') {
+          applyManualOrder(data, usePreferenceStore().config.taskManualOrder.all, (fresh) => {
+            sortTasks(fresh, 'added-at', 'desc', addedAtIndex)
+          })
+        } else {
+          sortTasks(data, field, direction, addedAtIndex)
+        }
       } else {
         // Active tab: aria2 returns insertion-order; apply user sort.
         data = await api.fetchTaskList({ type: currentList.value })
@@ -124,7 +145,13 @@ export const useTaskStore = defineStore('task', () => {
         trackFirstSeen(data)
         const addedAtIndex = buildSortableAddedAtMap(data, [])
         const { field, direction } = sortConfig.active
-        sortTasks(data, field, direction, addedAtIndex)
+        if (field === 'manual') {
+          applyManualOrder(data, usePreferenceStore().config.taskManualOrder.active, (fresh) => {
+            sortTasks(fresh, 'added-at', 'desc', addedAtIndex)
+          })
+        } else {
+          sortTasks(data, field, direction, addedAtIndex)
+        }
       }
 
       taskList.value = data
@@ -147,6 +174,51 @@ export const useTaskStore = defineStore('task', () => {
 
   function selectTasks(list: string[]) {
     selectedGidList.value = list
+  }
+
+  async function saveManualOrder(gids: string[]) {
+    const preferenceStore = usePreferenceStore()
+    const tab = currentList.value === 'stopped' ? 'stopped' : currentList.value === 'all' ? 'all' : 'active'
+    const taskSort = {
+      ...preferenceStore.config.taskSort,
+      [tab]: {
+        ...preferenceStore.config.taskSort[tab],
+        field: 'manual',
+      },
+    }
+    const taskManualOrder = {
+      ...preferenceStore.config.taskManualOrder,
+      [tab]: [...gids],
+    }
+    await preferenceStore.updateAndSave({ taskSort, taskManualOrder })
+  }
+
+  async function saveCurrentManualOrder() {
+    await saveManualOrder(createManualOrderSnapshot(taskList.value))
+  }
+
+  async function changeCurrentSort(field: ActiveSortField | StoppedSortField | AllSortField) {
+    const preferenceStore = usePreferenceStore()
+    const tab = currentList.value === 'stopped' ? 'stopped' : currentList.value === 'all' ? 'all' : 'active'
+    const taskSort = preferenceStore.config?.taskSort ?? DEFAULT_TASK_SORT
+    const current = taskSort[tab]
+    const direction: SortDirection =
+      field === 'manual' ? 'desc' : current.field === field ? (current.direction === 'desc' ? 'asc' : 'desc') : 'desc'
+    const nextTaskSort = { ...taskSort, [tab]: { field, direction } }
+    const nextConfig =
+      field === 'manual'
+        ? {
+            taskSort: nextTaskSort,
+            taskManualOrder: {
+              ...preferenceStore.config.taskManualOrder,
+              [tab]: createManualOrderSnapshot(taskList.value),
+            },
+          }
+        : { taskSort: nextTaskSort }
+
+    preferenceStore.updatePreference(nextConfig)
+    await fetchList()
+    preferenceStore.updateAndSave(nextConfig).catch((e: unknown) => logger.error('TaskStore.changeCurrentSort', e))
   }
 
   function selectAllTask() {
@@ -239,8 +311,7 @@ export const useTaskStore = defineStore('task', () => {
    *
    * The global `pause-metadata` setting (controlled by btAutoDownloadContent)
    * determines what happens after metadata resolves:
-   * - pause-metadata=true  → follow-up download auto-pauses → poller polls
-   *   followedBy, shows file selection, then unpauses
+   * - pause-metadata=true  → followedBy content task stays paused until selection
    * - pause-metadata=false → follow-up download starts immediately (no selection)
    *
    * Directly registers the GID for monitoring to avoid caller-chain breaks.
@@ -253,8 +324,8 @@ export const useTaskStore = defineStore('task', () => {
       typeof pauseMetadataOption === 'string' ? pauseMetadataOption : preferenceStore.config.pauseMetadata
     const showFileSelection = shouldShowFileSelection({ pauseMetadata })
     const options = showFileSelection
-      ? buildMetadataOnlyOptions(data.options)
-      : { ...data.options, 'pause-metadata': 'false' }
+      ? { ...buildMetadataOnlyOptions(data.options), 'check-integrity': 'true', 'force-save': 'true' }
+      : { ...data.options, 'pause-metadata': 'false', 'check-integrity': 'true', 'force-save': 'true' }
 
     const gids = await api.addUri({
       uris: [data.uri],
@@ -315,24 +386,35 @@ export const useTaskStore = defineStore('task', () => {
   const taskOps = {} as ReturnType<typeof createTaskOperations>
 
   async function batchResumeSelectedTasks() {
-    if (selectedGidList.value.length === 0) return
-    return api.batchResumeTask({ gids: selectedGidList.value })
+    const selected = new Set(selectedGidList.value)
+    const gids = taskList.value
+      .filter((task) => selected.has(task.gid) && task.status === TASK_STATUS.PAUSED)
+      .map((task) => task.gid)
+    if (gids.length === 0) return
+    return api.batchResumeTask({ gids })
   }
 
   async function batchPauseSelectedTasks() {
-    if (selectedGidList.value.length === 0) return
-    return api.batchPauseTask({ gids: selectedGidList.value })
+    const selected = new Set(selectedGidList.value)
+    const gids = taskList.value
+      .filter((task) => {
+        if (!selected.has(task.gid)) return false
+        return task.status === TASK_STATUS.ACTIVE || task.status === TASK_STATUS.WAITING
+      })
+      .map((task) => task.gid)
+    if (gids.length === 0) return
+    return api.batchPauseTask({ gids })
   }
 
-  function addToSeedingList(gid: string) {
-    if (seedingList.value.includes(gid)) return
-    seedingList.value = [...seedingList.value, gid]
+  function addToSharingList(gid: string) {
+    if (sharingList.value.includes(gid)) return
+    sharingList.value = [...sharingList.value, gid]
   }
 
-  function removeFromSeedingList(gid: string) {
-    const idx = seedingList.value.indexOf(gid)
+  function removeFromSharingList(gid: string) {
+    const idx = sharingList.value.indexOf(gid)
     if (idx === -1) return
-    seedingList.value = [...seedingList.value.slice(0, idx), ...seedingList.value.slice(idx + 1)]
+    sharingList.value = [...sharingList.value.slice(0, idx), ...sharingList.value.slice(idx + 1)]
   }
 
   async function restartTask(task: Aria2Task) {
@@ -348,13 +430,16 @@ export const useTaskStore = defineStore('task', () => {
     currentTaskItem,
     currentTaskFiles,
     currentTaskPeers,
-    seedingList,
+    sharingList,
     taskList,
     selectedGidList,
     setApi,
     changeCurrentList,
     fetchList,
     selectTasks,
+    saveManualOrder,
+    saveCurrentManualOrder,
+    changeCurrentSort,
     selectAllTask,
     fetchItem,
     showTaskDetail,
@@ -376,10 +461,10 @@ export const useTaskStore = defineStore('task', () => {
     pauseAllTask: () => taskOps.pauseAllTask(),
     resumeAllTask: () => taskOps.resumeAllTask(),
     toggleTask: (task: Aria2Task) => taskOps.toggleTask(task),
-    addToSeedingList,
-    removeFromSeedingList,
-    stopSeeding: (task: Aria2Task) => taskOps.stopSeeding(task),
-    stopAllSeeding: () => taskOps.stopAllSeeding(),
+    addToSharingList,
+    removeFromSharingList,
+    stopSharing: (task: Aria2Task) => taskOps.stopSharing(task),
+    stopAllSharing: () => taskOps.stopAllSharing(),
     removeTaskRecord: (task: Aria2Task) => taskOps.removeTaskRecord(task),
     purgeTaskRecord: () => taskOps.purgeTaskRecord(),
     saveSession: () => taskOps.saveSession(),

@@ -41,7 +41,6 @@ export async function findStaleRecords(records: StaleCheckItem[]): Promise<strin
       continue
     }
 
-    // Legacy single-file fallback (unchanged)
     if (!record.dir || !record.name) {
       staleGids.push(record.gid)
       continue
@@ -104,8 +103,9 @@ export type HashExtractor = (filePath: string) => Promise<string | null>
  * Scan the download directory for aria2-saved metadata files and
  * clean up those associated with the given torrent.
  *
- * Handles hex40 `.torrent` metadata created by `rpc-save-upload-metadata`.
- * We parse each candidate and match by infoHash before removing it.
+ * Handles hex40 `.torrent` metadata created by `bt-save-metadata` and
+ * `rpc-save-upload-metadata`. We parse each candidate and match by infoHash
+ * before removing it.
  *
  * Uses `removePath()` (permanent delete) instead of `trashPath()` because these are
  * internal aria2 engine artifacts — not user content.
@@ -155,6 +155,3 @@ export async function cleanupAria2MetadataFiles(
     return false
   }
 }
-
-/** Backward-compatible alias for cleanupAria2MetadataFiles. */
-export const cleanupTorrentMetadataFiles = cleanupAria2MetadataFiles

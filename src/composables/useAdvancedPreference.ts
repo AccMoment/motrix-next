@@ -4,54 +4,38 @@
  * Contains configuration transforms, secret generation, and port randomization
  * logic that was previously inline in the component's script setup.
  */
-import { ENGINE_RPC_PORT, PROXY_SCOPES, PROXY_SCOPE_OPTIONS, DEFAULT_APP_CONFIG as D } from '@shared/constants'
-import { convertCommaToLine, convertLineToComma, generateRandomInt } from '@shared/utils'
+import {
+  PORT_RECOVERY_RANGE_END,
+  PORT_RECOVERY_RANGE_START,
+  PROXY_SCOPE_OPTIONS,
+  DEFAULT_APP_CONFIG as D,
+} from '@shared/constants'
+import { generateRandomInt } from '@shared/utils'
 import { isValidAria2ProxyUrl, UNSUPPORTED_PROXY_SCHEME_RE } from '@shared/utils/aria2Proxy'
 import type { AppConfig } from '@shared/types'
+import { buildDownloadProxyOptions, normalizeProxyMode, type EngineProxyMode } from '@shared/utils/proxyPolicy'
+import { generateConfigSecret } from '@shared/utils/configHydration'
 
 export { isValidAria2ProxyUrl } from '@shared/utils/aria2Proxy'
-
-// ── URL Validation ──────────────────────────────────────────────────
-
-/**
- * Validates whether a string is a valid HTTP/HTTPS URL suitable for use as a
- * tracker source. Custom tracker sources are fetched via axios GET, so only
- * HTTP-based protocols are accepted.
- *
- * Exported for unit testing and use in Advanced.vue's tracker source validation.
- */
-export function isValidTrackerSourceUrl(input: string): boolean {
-  const trimmed = input.trim()
-  if (!trimmed) return false
-  try {
-    const url = new URL(trimmed)
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
 
 // ── Types ───────────────────────────────────────────────────────────
 
 export interface AdvancedForm {
   [key: string]: unknown
   proxy: {
-    enable: boolean
+    mode: EngineProxyMode
     server: string
+    username?: string
+    password?: string
     bypass: string
     scope: string[]
   }
-  trackerSource: string[]
-  customTrackerUrls: string[]
-  btTracker: string
-  autoSyncTracker: boolean
-  lastSyncTrackerTime: number
   rpcListenPort: number
   rpcSecret: string
   extensionApiPort: number
   extensionApiSecret: string
   autoSubmitFromExtension: boolean
-  autoSelectAllFilesFromExtension: boolean
+  autoSelectAllBtFilesFromExtension: boolean
   silentAutoSubmitFromExtension: boolean
   autoChangeConflictingPorts: boolean
   enableUpnp: boolean
@@ -59,6 +43,7 @@ export interface AdvancedForm {
   dhtListenPort: number
   userAgent: string
   logLevel: string
+  aria2LogLevel: string
   tempFilesDir: string
   hardwareRendering: boolean
   // Clipboard detection (migrated from legacy Basic tab)
@@ -69,11 +54,6 @@ export interface AdvancedForm {
   clipboardEd2k: boolean
   clipboardThunder: boolean
   clipboardBtHash: boolean
-  // Protocol handlers (migrated from legacy Basic tab)
-  protocolMagnet: boolean
-  protocolEd2k: boolean
-  protocolThunder: boolean
-  protocolMotrixnext: boolean
   // Timeout & disk (shared with Network tab but kept for backward compat)
   connectTimeout: number
   timeout: number
@@ -87,52 +67,34 @@ export interface AdvancedForm {
  * Used for aria2 RPC authentication.
  */
 export function generateSecret(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  const values = crypto.getRandomValues(new Uint8Array(16))
-  return Array.from(values, (v) => chars[v % chars.length]).join('')
+  return generateConfigSecret()
 }
 
 /**
  * Builds the advanced form state from the preference store config.
  * All fallback values reference DEFAULT_APP_CONFIG (single source of truth).
- * If no RPC secret exists, generates one.
  */
 export function buildAdvancedForm(config: AppConfig): {
   form: AdvancedForm
-  generatedSecret: string | null
-  generatedApiSecret: string | null
 } {
   const proxy = config.proxy ?? D.proxy
-  // Distinguish "never set" (undefined/null → auto-generate) from
-  // "intentionally cleared" ('' → respect user choice).
-  const hasSecret = config.rpcSecret != null
-  const rpcSecret = hasSecret ? config.rpcSecret : generateSecret()
-  const generatedSecret = hasSecret ? null : rpcSecret
-
-  // Extension API secret: auto-generate if never set
-  const hasApiSecret = config.extensionApiSecret != null
-  const extensionApiSecret = hasApiSecret ? config.extensionApiSecret! : generateSecret()
-  const generatedApiSecret: string | null = hasApiSecret ? null : extensionApiSecret
-
   return {
     form: {
       proxy: {
-        enable: proxy.enable ?? D.proxy.enable,
+        mode: normalizeProxyMode(proxy.mode),
         server: proxy.server ?? D.proxy.server,
+        username: proxy.username ?? D.proxy.username,
+        password: proxy.password ?? D.proxy.password,
         bypass: proxy.bypass ?? D.proxy.bypass,
         scope: proxy.scope ?? [...PROXY_SCOPE_OPTIONS],
       },
-      trackerSource: config.trackerSource ?? [...D.trackerSource],
-      customTrackerUrls: config.customTrackerUrls ?? [...D.customTrackerUrls],
-      btTracker: convertCommaToLine(config.btTracker ?? D.btTracker),
-      autoSyncTracker: config.autoSyncTracker ?? D.autoSyncTracker,
-      lastSyncTrackerTime: config.lastSyncTrackerTime ?? D.lastSyncTrackerTime,
       rpcListenPort: config.rpcListenPort ?? D.rpcListenPort,
-      rpcSecret,
+      rpcSecret: config.rpcSecret,
       extensionApiPort: config.extensionApiPort ?? D.extensionApiPort,
-      extensionApiSecret,
+      extensionApiSecret: config.extensionApiSecret,
       autoSubmitFromExtension: config.autoSubmitFromExtension ?? D.autoSubmitFromExtension,
-      autoSelectAllFilesFromExtension: config.autoSelectAllFilesFromExtension ?? D.autoSelectAllFilesFromExtension,
+      autoSelectAllBtFilesFromExtension:
+        config.autoSelectAllBtFilesFromExtension ?? D.autoSelectAllBtFilesFromExtension,
       silentAutoSubmitFromExtension: config.silentAutoSubmitFromExtension ?? D.silentAutoSubmitFromExtension,
       autoChangeConflictingPorts: config.autoChangeConflictingPorts ?? D.autoChangeConflictingPorts,
       enableUpnp: config.enableUpnp ?? D.enableUpnp,
@@ -140,6 +102,7 @@ export function buildAdvancedForm(config: AppConfig): {
       dhtListenPort: Number(config.dhtListenPort ?? D.dhtListenPort),
       userAgent: config.userAgent ?? D.userAgent,
       logLevel: config.logLevel ?? D.logLevel,
+      aria2LogLevel: config.aria2LogLevel ?? D.aria2LogLevel,
       tempFilesDir: config.tempFilesDir ?? D.tempFilesDir,
       hardwareRendering: config.hardwareRendering ?? D.hardwareRendering,
       // Clipboard detection
@@ -150,18 +113,11 @@ export function buildAdvancedForm(config: AppConfig): {
       clipboardEd2k: config.clipboard?.ed2k ?? D.clipboard.ed2k,
       clipboardThunder: config.clipboard?.thunder ?? D.clipboard.thunder,
       clipboardBtHash: config.clipboard?.btHash ?? D.clipboard.btHash,
-      // Protocol handlers
-      protocolMagnet: config.protocols?.magnet ?? D.protocols.magnet,
-      protocolEd2k: config.protocols?.ed2k ?? D.protocols.ed2k,
-      protocolThunder: config.protocols?.thunder ?? D.protocols.thunder,
-      protocolMotrixnext: config.protocols?.motrixnext ?? D.protocols.motrixnext,
       // Timeout & disk
       connectTimeout: config.connectTimeout ?? D.connectTimeout,
       timeout: config.timeout ?? D.timeout,
       fileAllocation: config.fileAllocation ?? D.fileAllocation,
     },
-    generatedSecret,
-    generatedApiSecret,
   }
 }
 
@@ -170,26 +126,19 @@ export function buildAdvancedForm(config: AppConfig): {
  * Pure function — no side effects.
  */
 export function buildAdvancedSystemConfig(f: AdvancedForm): Record<string, string> {
-  const proxyForDownloads =
-    f.proxy.enable && Array.isArray(f.proxy.scope) && f.proxy.scope.includes(PROXY_SCOPES.DOWNLOAD)
   return {
     'rpc-listen-port': String(f.rpcListenPort),
     'rpc-secret': f.rpcSecret,
-    'enable-dht': 'true',
-    'enable-peer-exchange': 'true',
     'listen-port': String(f.listenPort),
     'dht-listen-port': String(f.dhtListenPort),
     'user-agent': f.userAgent || '',
-    'log-level': f.logLevel || 'debug',
-    'bt-tracker': convertLineToComma(f.btTracker),
-    'all-proxy': proxyForDownloads ? f.proxy.server : '',
-    'no-proxy': proxyForDownloads ? f.proxy.bypass || '' : '',
+    ...buildDownloadProxyOptions(f.proxy),
   }
 }
 
 /**
  * Transforms the advanced form for store persistence.
- * Collapses flat clipboard/protocol fields into nested objects and
+ * Collapses flat clipboard fields into nested objects and
  * normalizes tracker format.
  */
 export function transformAdvancedForStore(f: AdvancedForm): Record<string, unknown> {
@@ -201,15 +150,10 @@ export function transformAdvancedForStore(f: AdvancedForm): Record<string, unkno
     clipboardEd2k,
     clipboardThunder,
     clipboardBtHash,
-    protocolMagnet,
-    protocolEd2k,
-    protocolThunder,
-    protocolMotrixnext,
     ...rest
   } = f
   return {
     ...rest,
-    btTracker: convertLineToComma(f.btTracker),
     clipboard: {
       enable: clipboardEnable,
       http: clipboardHttp,
@@ -218,12 +162,6 @@ export function transformAdvancedForStore(f: AdvancedForm): Record<string, unkno
       ed2k: clipboardEd2k,
       thunder: clipboardThunder,
       btHash: clipboardBtHash,
-    },
-    protocols: {
-      magnet: protocolMagnet,
-      ed2k: protocolEd2k,
-      thunder: protocolThunder,
-      motrixnext: protocolMotrixnext,
     },
   }
 }
@@ -235,7 +173,7 @@ export function transformAdvancedForStore(f: AdvancedForm): Record<string, unkno
  * Returns null if valid, or an i18n error key if invalid.
  */
 export function validateAdvancedForm(f: AdvancedForm): string | null {
-  if (f.proxy.enable && f.proxy.server) {
+  if (f.proxy.mode === 'manual' && f.proxy.server) {
     if (!isValidAria2ProxyUrl(f.proxy.server)) {
       return UNSUPPORTED_PROXY_SCHEME_RE.test(f.proxy.server.trim())
         ? 'preferences.proxy-unsupported-protocol'
@@ -248,13 +186,13 @@ export function validateAdvancedForm(f: AdvancedForm): string | null {
 // ── Port Randomization ──────────────────────────────────────────────
 
 export function randomRpcPort(): number {
-  return generateRandomInt(ENGINE_RPC_PORT, 20000)
+  return generateRandomInt(PORT_RECOVERY_RANGE_START, PORT_RECOVERY_RANGE_END + 1)
 }
 
 export function randomBtPort(): number {
-  return generateRandomInt(20000, 24999)
+  return generateRandomInt(PORT_RECOVERY_RANGE_START, PORT_RECOVERY_RANGE_END + 1)
 }
 
 export function randomDhtPort(): number {
-  return generateRandomInt(25000, 29999)
+  return generateRandomInt(PORT_RECOVERY_RANGE_START, PORT_RECOVERY_RANGE_END + 1)
 }

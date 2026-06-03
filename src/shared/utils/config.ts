@@ -1,7 +1,7 @@
 /** @fileoverview Config key conversion, diffing, validation, and engine option formatting. */
 import { camelCase, isEmpty, isFunction, isNaN, isPlainObject, kebabCase, omitBy, pick, isArray } from 'lodash-es'
 import { userKeys, systemKeys, needRestartKeys } from '@shared/configKeys'
-import { ENGINE_RPC_HOST } from '@shared/constants'
+import { ENGINE_RPC_HOST, ENGINE_RPC_PORT } from '@shared/constants'
 import { splitTextRows } from './format'
 import type { Aria2EngineOptions } from '@shared/types'
 
@@ -22,7 +22,11 @@ export const changeKeysToCamelCase = (obj: Record<string, unknown> = {}): Record
 }
 
 export const changeKeysToKebabCase = (obj: Record<string, unknown> = {}): Record<string, unknown> => {
-  return changeKeysCase(obj, (key) => kebabCase(key).replace(/^ed-2-k-/, 'ed2k-'))
+  return changeKeysCase(obj, (key) =>
+    kebabCase(key)
+      .replace(/^ed-2-k-/, 'ed2k-')
+      .replace(/^aria-2-/, 'aria2-'),
+  )
 }
 
 export const validateNumber = (n: unknown): boolean => {
@@ -62,7 +66,7 @@ export const diffConfig = (
     if (isArray(val) || isPlainObject(val)) {
       return JSON.stringify(curr[key]) === JSON.stringify(val)
     }
-    // Coerce-equal primitives (e.g. string "21301" == number 21301) are NOT
+    // Coerce-equal primitives (e.g. string "29120" == number 29120) are NOT
     // real changes.  This handles legacy config.json entries where port values
     // were stored as strings but the form produces numbers.
 
@@ -105,7 +109,7 @@ export const formatOptionsForEngine = (
   return result
 }
 
-export const buildRpcUrl = (options: { port: number; secret?: string } = { port: 16800 }): string => {
+export const buildRpcUrl = (options: { port: number; secret?: string } = { port: ENGINE_RPC_PORT }): string => {
   const { port, secret } = options
   let result = `${ENGINE_RPC_HOST}:${port}/jsonrpc`
   if (secret) result = `token:${secret}@${result}`
@@ -131,7 +135,6 @@ export const checkIsNeedRestart = (changed: Record<string, unknown> = {}): boole
  * - needRestartKeys: bound at process startup or intentionally engine-restarted
  *   so queued runtime work cannot keep stale behavior
  * - aria2 docs exclusions: not accepted by `changeGlobalOption`
- * - log-level: needs full app relaunch (tauri-plugin-log init), not engine restart
  */
 const NON_HOT_RELOADABLE = new Set([
   ...needRestartKeys,
@@ -141,38 +144,9 @@ const NON_HOT_RELOADABLE = new Set([
   'pause',
   'select-file',
   'rpc-save-upload-metadata',
-  'enable-dht',
-  'log-level',
 ])
 
-const REMOVED_ENGINE_KEYS = new Set([
-  'async-dns',
-  'bt-load-saved-metadata',
-  'bt-hash-check-seed',
-  'bt-metadata-only',
-  'bt-prioritize-piece',
-  'bt-remove-unselected-file',
-  'bt-save-metadata',
-  'bt-seed-unverified',
-  'bt-tracker-connect-timeout',
-  'bt-tracker-timeout',
-  'dht-entry-point6',
-  'enable-dht6',
-  'follow-metalink',
-  'follow-torrent',
-  'ftp-reuse-connection',
-  'http-auth-challenge',
-  'metalink-base-uri',
-  'metalink-enable-unique-protocol',
-  'metalink-language',
-  'metalink-location',
-  'metalink-os',
-  'metalink-preferred-protocol',
-  'metalink-version',
-  'ssh-host-key-md',
-  'peer-agent',
-  'peer-id-prefix',
-])
+const SUPPORTED_ENGINE_KEYS = new Set(systemKeys)
 
 /**
  * Filters a system config object to only keys that aria2 accepts via
@@ -181,10 +155,5 @@ const REMOVED_ENGINE_KEYS = new Set([
  */
 export const filterHotReloadableKeys = (config: Record<string, string>): Record<string, string> =>
   Object.fromEntries(
-    Object.entries(config).filter(([key]) => !NON_HOT_RELOADABLE.has(key) && !REMOVED_ENGINE_KEYS.has(key)),
+    Object.entries(config).filter(([key]) => SUPPORTED_ENGINE_KEYS.has(key) && !NON_HOT_RELOADABLE.has(key)),
   )
-
-export const checkIsNeedRun = (enable: boolean, lastTime: number, interval: number): boolean => {
-  if (!enable) return false
-  return Date.now() - lastTime > interval
-}

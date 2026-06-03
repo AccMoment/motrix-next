@@ -3,11 +3,14 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   calcProgress,
   calcRatio,
+  getTaskCompletedLength,
   getTaskName,
   isMagnetTask,
+  isBtMetadataTask,
   checkTaskIsBT,
   checkTaskIsEd2kSearch,
-  checkTaskIsSeeder,
+  checkTaskIsSharing,
+  getTaskSharingKind,
   getFileNameFromFile,
   getTaskDisplayName,
   buildMagnetLink,
@@ -93,6 +96,36 @@ describe('calcRatio', () => {
 
   it('handles string inputs', () => {
     expect(calcRatio('1000', '2000')).toBe(2)
+  })
+})
+
+describe('getTaskCompletedLength', () => {
+  it('uses aria2 completedLength for display progress', () => {
+    const task = createMockTask({
+      status: 'paused',
+      totalLength: '1000',
+      completedLength: '300',
+      ed2k: { completedLength: '300' },
+    })
+
+    expect(getTaskCompletedLength(task)).toBe(300)
+  })
+
+  it('keeps normal HTTP and BT task progress unchanged', () => {
+    const httpTask = createMockTask({
+      status: 'active',
+      totalLength: '1000',
+      completedLength: '200',
+    })
+    const btTask = createMockTask({
+      status: 'active',
+      totalLength: '1000',
+      completedLength: '300',
+      bittorrent: { info: { name: 'sample.iso' } },
+    })
+
+    expect(getTaskCompletedLength(httpTask)).toBe(200)
+    expect(getTaskCompletedLength(btTask)).toBe(300)
   })
 })
 
@@ -319,6 +352,37 @@ describe('isMagnetTask', () => {
   })
 })
 
+describe('isBtMetadataTask', () => {
+  it('returns true for native aria2 metadata task without torrent info', () => {
+    const task = createMockTask({
+      bittorrent: {},
+      files: [],
+    })
+
+    expect(isBtMetadataTask(task)).toBe(true)
+  })
+
+  it('returns false for native aria2 content task with following parent', () => {
+    const task = createMockTask({
+      bittorrent: {},
+      following: 'metadata-gid',
+    })
+
+    expect(isBtMetadataTask(task)).toBe(false)
+  })
+
+  it('returns false for resolved BitTorrent content task', () => {
+    const task = createMockTask({
+      bittorrent: {
+        info: { name: 'KNOPPIX_V9.1CD-2021-01-25-EN' },
+      },
+      files: [createMockFile({ path: '/downloads/KNOPPIX.iso' })],
+    })
+
+    expect(isBtMetadataTask(task)).toBe(false)
+  })
+})
+
 describe('checkTaskIsBT', () => {
   it('returns true when bittorrent metadata is present', () => {
     const task = createMockTask({ bittorrent: { info: { name: 'test' } } })
@@ -354,17 +418,29 @@ describe('checkTaskIsEd2kSearch', () => {
   })
 })
 
-describe('checkTaskIsSeeder', () => {
-  it('returns true when BT task has seeder=true', () => {
+describe('task sharing state', () => {
+  it('identifies BT seeding without treating the helper as BT-only', () => {
     const task = createMockTask({
       bittorrent: { info: { name: 'test' } },
       seeder: 'true',
     })
-    expect(checkTaskIsSeeder(task)).toBe(true)
+    expect(getTaskSharingKind(task)).toBe('bt')
+    expect(checkTaskIsSharing(task)).toBe(true)
   })
 
-  it('returns false for non-BT task', () => {
-    expect(checkTaskIsSeeder(createMockTask())).toBe(false)
+  it('identifies ED2K sharing from the common seeder flag', () => {
+    const task = createMockTask({
+      ed2k: { name: 'sample.bin', hash: 'abcdef' },
+      seeder: 'true',
+    })
+
+    expect(getTaskSharingKind(task)).toBe('ed2k')
+    expect(checkTaskIsSharing(task)).toBe(true)
+  })
+
+  it('returns null for non-sharing tasks', () => {
+    expect(getTaskSharingKind(createMockTask())).toBeNull()
+    expect(checkTaskIsSharing(createMockTask())).toBe(false)
   })
 
   it('returns false when seeder is false string', () => {
@@ -372,7 +448,7 @@ describe('checkTaskIsSeeder', () => {
       bittorrent: { info: { name: 'test' } },
       seeder: 'false',
     })
-    expect(checkTaskIsSeeder(task)).toBe(false)
+    expect(getTaskSharingKind(task)).toBeNull()
   })
 
   it('returns false when seeder is true but task is paused', () => {
@@ -381,7 +457,7 @@ describe('checkTaskIsSeeder', () => {
       bittorrent: { info: { name: 'test' } },
       seeder: 'true',
     })
-    expect(checkTaskIsSeeder(task)).toBe(false)
+    expect(getTaskSharingKind(task)).toBeNull()
   })
 })
 

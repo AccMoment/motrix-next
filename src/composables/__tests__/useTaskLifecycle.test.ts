@@ -15,7 +15,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 
 const {
   buildHistoryRecord,
-  buildBtCompletionRecord,
+  buildSharingCompletionRecord,
   isMetadataTask,
   shouldRunStaleCleanup,
   historyRecordToTask,
@@ -257,16 +257,16 @@ describe('buildHistoryRecord', () => {
   })
 })
 
-// ── buildBtCompletionRecord ──────────────────────────────────────────
+// ── buildSharingCompletionRecord ──────────────────────────────────────────
 
-describe('buildBtCompletionRecord', () => {
-  it('overrides status to "complete" for a seeding task (aria2 status=active)', () => {
+describe('buildSharingCompletionRecord', () => {
+  it('overrides status to "complete" for a shared-upload task (aria2 status=active)', () => {
     const task = makeTask({
       status: 'active',
       bittorrent: { info: { name: 'Ubuntu 24.04' } },
       seeder: 'true',
     } as Partial<Aria2Task>)
-    const record = buildBtCompletionRecord(task)
+    const record = buildSharingCompletionRecord(task)
     expect(record.status).toBe('complete')
   })
 
@@ -279,7 +279,7 @@ describe('buildBtCompletionRecord', () => {
       bittorrent: { info: { name: 'Big Archive' } },
       infoHash: 'abc123def456',
     } as Partial<Aria2Task>)
-    const record = buildBtCompletionRecord(task)
+    const record = buildSharingCompletionRecord(task)
 
     // status overridden
     expect(record.status).toBe('complete')
@@ -294,9 +294,9 @@ describe('buildBtCompletionRecord', () => {
     expect(meta.infoHash).toBe('abc123def456')
   })
 
-  it('works for non-seeding active tasks (defensive)', () => {
+  it('works for active tasks defensively', () => {
     const task = makeTask({ status: 'active' })
-    const record = buildBtCompletionRecord(task)
+    const record = buildSharingCompletionRecord(task)
     expect(record.status).toBe('complete')
   })
 })
@@ -304,33 +304,22 @@ describe('buildBtCompletionRecord', () => {
 // ── isMetadataTask ───────────────────────────────────────────────────
 
 describe('isMetadataTask', () => {
-  it('recognizes metadata tasks by the basename of the first file path', () => {
+  it('recognizes native aria2 metadata tasks', () => {
     const task = makeTask({
-      files: [
-        {
-          index: '1',
-          path: '/downloads/[METADATA]KNOPPIX_V9.1CD-2021-01-25-EN',
-          length: '27373',
-          completedLength: '27373',
-          selected: 'true',
-          uris: [],
-        },
-      ],
+      bittorrent: {},
     })
 
     expect(isMetadataTask(task)).toBe(true)
   })
 
-  it('recognizes DB-rehydrated metadata records by bittorrent info name', () => {
-    const task = historyRecordToTask(
-      makeRecord({
-        name: '[METADATA]KNOPPIX_V9.1CD-2021-01-25-EN',
-        task_type: 'bt',
-        meta: JSON.stringify({ infoHash: 'abcdef1234567890abcdef1234567890abcdef12' }),
-      }),
-    )
+  it('returns false for resolved native aria2 content tasks', () => {
+    const task = makeTask({
+      bittorrent: {
+        info: { name: 'KNOPPIX_V9.1CD-2021-01-25-EN' },
+      },
+    })
 
-    expect(isMetadataTask(task)).toBe(true)
+    expect(isMetadataTask(task)).toBe(false)
   })
 })
 

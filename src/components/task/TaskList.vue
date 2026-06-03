@@ -1,9 +1,12 @@
 <script setup lang="ts">
-/** @fileoverview Scrollable task list container with AutoAnimate transitions. */
-import { ref, computed, watch } from 'vue'
-import { vAutoAnimate } from '@formkit/auto-animate'
+/** @fileoverview Scrollable task list container with SortableJS drag ordering and Vue list transitions. */
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { useSortable } from '@vueuse/integrations/useSortable'
 import { useTaskStore } from '@/stores/task'
+import { usePreferenceStore } from '@/stores/preference'
 import TaskItem from './TaskItem.vue'
+import TaskCompactItem from './TaskCompactItem.vue'
+import type { SortableEvent } from 'sortablejs'
 import type { Aria2Task } from '@shared/types'
 
 const emit = defineEmits<{
@@ -15,26 +18,133 @@ const emit = defineEmits<{
   'show-info': [task: Aria2Task]
   folder: [task: Aria2Task]
   'open-file': [task: Aria2Task]
-  'stop-seeding': [task: Aria2Task]
+  'stop-sharing': [task: Aria2Task]
 }>()
 
 const taskStore = useTaskStore()
+const preferenceStore = usePreferenceStore()
 
 const taskList = ref<Aria2Task[]>(taskStore.taskList)
+const listRef = ref<HTMLElement | null>(null)
+const sorting = ref(false)
+let lastFloatingRect: DOMRect | null = null
+let floatingRectFrame = 0
 const selectedGidList = computed(() => taskStore.selectedGidList)
+const taskCardComponent = computed(() =>
+  preferenceStore.config.taskCardMode === 'compact' ? TaskCompactItem : TaskItem,
+)
+
+onBeforeUnmount(() => {
+  stopFloatingRectTracking()
+  lastFloatingRect = null
+})
+
+function trackFloatingRect() {
+  const floating = document.querySelector<HTMLElement>('.task-list-item--floating')
+  if (floating?.isConnected) {
+    lastFloatingRect = floating.getBoundingClientRect()
+  }
+
+  if (sorting.value) {
+    floatingRectFrame = requestAnimationFrame(trackFloatingRect)
+  }
+}
+
+function startFloatingRectTracking() {
+  stopFloatingRectTracking()
+  lastFloatingRect = null
+  floatingRectFrame = requestAnimationFrame(trackFloatingRect)
+}
+
+function stopFloatingRectTracking() {
+  if (!floatingRectFrame) return
+  cancelAnimationFrame(floatingRectFrame)
+  floatingRectFrame = 0
+}
+
+function animateDropSettle(event: SortableEvent): Promise<void> {
+  const item = event.item
+  if (!lastFloatingRect || !item.isConnected) return Promise.resolve()
+
+  const targetRect = item.getBoundingClientRect()
+  const deltaX = lastFloatingRect.left - targetRect.left
+  const deltaY = lastFloatingRect.top - targetRect.top
+  lastFloatingRect = null
+
+  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return Promise.resolve()
+
+  item.classList.add('task-list-item--settling')
+  item.style.setProperty('--task-drop-x', `${deltaX}px`)
+  item.style.setProperty('--task-drop-y', `${deltaY}px`)
+
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      item.classList.add('task-list-item--settled')
+    })
+
+    window.setTimeout(() => {
+      item.classList.remove('task-list-item--settling', 'task-list-item--settled')
+      item.style.removeProperty('--task-drop-x')
+      item.style.removeProperty('--task-drop-y')
+      resolve()
+    }, 320)
+  })
+}
 
 watch(
   () => taskStore.taskList,
   (v) => {
+    if (sorting.value) return
     taskList.value = v
   },
 )
+
+useSortable(listRef, taskList, {
+  animation: 240,
+  handle: '.task-drag-handle',
+  draggable: '.task-list-item',
+  filter: '.task-item-actions, button, a, input, textarea, select, [data-no-drag]',
+  ghostClass: 'task-list-item--ghost',
+  chosenClass: 'task-list-item--chosen',
+  fallbackClass: 'task-list-item--floating',
+  dragClass: 'task-list-item--dragging',
+  direction: 'vertical',
+  swapThreshold: 0.72,
+  invertedSwapThreshold: 0.28,
+  invertSwap: false,
+  forceFallback: true,
+  fallbackOnBody: true,
+  fallbackTolerance: 3,
+  preventOnFilter: false,
+  onStart: () => {
+    sorting.value = true
+    startFloatingRectTracking()
+  },
+  onUpdate: (event) => {
+    if (event.oldIndex === undefined || event.newIndex === undefined || event.oldIndex === event.newIndex) return
+    const nextList = [...taskList.value]
+    const [task] = nextList.splice(event.oldIndex, 1)
+    if (!task) return
+    nextList.splice(event.newIndex, 0, task)
+    taskList.value = nextList
+  },
+  onEnd: async (event) => {
+    stopFloatingRectTracking()
+    await nextTick()
+    await animateDropSettle(event)
+    await taskStore.saveManualOrder(taskList.value.map((task) => task.gid))
+    window.setTimeout(() => {
+      sorting.value = false
+    }, 0)
+  },
+})
 
 function isSelected(gid: string) {
   return selectedGidList.value.includes(gid)
 }
 
 function handleItemClick(task: Aria2Task, event: MouseEvent) {
+  if (sorting.value) return
   const gid = task.gid
   const list = [...selectedGidList.value]
   if (event.metaKey || event.ctrlKey) {
@@ -51,7 +161,7 @@ function handleItemClick(task: Aria2Task, event: MouseEvent) {
 
 <template>
   <div class="task-list">
-    <div v-auto-animate="{ duration: 300, easing: 'ease-out' }" class="task-list-inner">
+    <TransitionGroup ref="listRef" tag="div" :css="!sorting" name="task-list-card" class="task-list-inner">
       <div
         v-for="item in taskList"
         :key="item.gid"
@@ -59,7 +169,8 @@ function handleItemClick(task: Aria2Task, event: MouseEvent) {
         class="task-list-item"
         @click="handleItemClick(item, $event)"
       >
-        <TaskItem
+        <component
+          :is="taskCardComponent"
           :task="item"
           @pause="emit('pause', item)"
           @resume="emit('resume', item)"
@@ -69,10 +180,10 @@ function handleItemClick(task: Aria2Task, event: MouseEvent) {
           @show-info="emit('show-info', item)"
           @folder="emit('folder', item)"
           @open-file="emit('open-file', item)"
-          @stop-seeding="emit('stop-seeding', item)"
+          @stop-sharing="emit('stop-sharing', item)"
         />
       </div>
-    </div>
+    </TransitionGroup>
   </div>
 </template>
 
@@ -106,6 +217,57 @@ function handleItemClick(task: Aria2Task, event: MouseEvent) {
   border-color: var(--task-item-hover-border);
 }
 .task-list-item {
+  position: relative;
   margin-bottom: 16px;
+}
+.task-list-card-move,
+.task-list-card-enter-active,
+.task-list-card-leave-active {
+  transition:
+    transform 260ms ease,
+    opacity 180ms ease;
+}
+.task-list-card-enter-from {
+  opacity: 0;
+  transform: scale(0.98);
+}
+.task-list-card-leave-to {
+  opacity: 0;
+  transform: scale(0.98);
+}
+.task-list-card-leave-active {
+  position: absolute;
+  width: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+.task-list-item--ghost {
+  overflow: hidden;
+  opacity: 0;
+}
+.task-list-item--floating {
+  opacity: 1 !important;
+  filter: none !important;
+  pointer-events: none;
+  transition: none !important;
+}
+.task-list-item--dragging {
+  opacity: 1 !important;
+}
+.task-list-item--settling {
+  z-index: 3;
+  transform: translate3d(var(--task-drop-x), var(--task-drop-y), 0);
+  will-change: transform;
+}
+.task-list-item--settling.task-list-item--settled {
+  transform: translate3d(0, 0, 0);
+  transition: transform 300ms ease;
+}
+.task-list-item :deep(button),
+.task-list-item :deep(a),
+.task-list-item :deep(input),
+.task-list-item :deep(textarea),
+.task-list-item :deep(select) {
+  cursor: auto;
 }
 </style>

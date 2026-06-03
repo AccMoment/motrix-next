@@ -10,7 +10,7 @@
  *
  * Key behaviors under test:
  *   1. onComplete handler always sends in-app toast; Rust sends native OS notification.
- *   2. onBtComplete handler always sends in-app toast; Rust sends native OS notification.
+ *   2. onSharingComplete handler always sends in-app toast; Rust sends native OS notification.
  *   3. onError handler logs the frontend toast path; Rust sends native OS notification.
  *   4. Metadata tasks are excluded from completion notifications.
  *   5. When action callbacks are provided, toast contains a render function.
@@ -38,7 +38,7 @@ vi.mock('../useNotificationToast', () => ({
   },
 }))
 
-import { handleTaskComplete, handleBtComplete, handleTaskError, handleTaskStart } from '../useTaskNotifyHandlers'
+import { handleTaskComplete, handleSharingComplete, handleTaskError, handleTaskStart } from '../useTaskNotifyHandlers'
 
 // ── Test data factory ────────────────────────────────────────────────
 
@@ -82,12 +82,19 @@ import type { NotifyDeps, StartNotifyDeps } from '../useTaskNotifyHandlers'
 function makeDeps(overrides: Partial<NotifyDeps> = {}): NotifyDeps {
   return {
     messageSuccess: vi.fn() as unknown as NotifyDeps['messageSuccess'],
+    messageError: vi.fn() as unknown as NotifyDeps['messageError'],
     t: vi.fn((key: string, params?: Record<string, unknown>) => {
       if (key === 'task.download-complete-message' && params?.taskName) {
-        return `${params.taskName} completed`
+        return `Saved: ${params.taskName}`
       }
       if (key === 'task.bt-download-complete-message' && params?.taskName) {
-        return `${params.taskName} — download complete, seeding...`
+        return `Seeding: ${params.taskName}`
+      }
+      if (key === 'task.ed2k-download-complete-message' && params?.taskName) {
+        return `Sharing: ${params.taskName}`
+      }
+      if (key === 'task.download-fail-message' && params?.taskName && params?.reason) {
+        return `${params.taskName}: ${params.reason}`
       }
       if (key === 'task.error-unknown') return 'Unknown error'
       return key
@@ -111,12 +118,14 @@ describe('handleTaskComplete', () => {
 
     expect(deps.messageSuccess).toHaveBeenCalledOnce()
     // Without action callbacks, renderCompletionToast returns plain string
-    expect(deps.messageSuccess).toHaveBeenCalledWith('test-file.zip completed')
+    expect(deps.messageSuccess).toHaveBeenCalledWith('Saved: test-file.zip')
   })
 
-  it('skips metadata-only tasks (followedBy present)', () => {
+  it('skips native aria2 metadata-only tasks', () => {
     const deps = makeDeps()
-    const task = makeTask({ followedBy: ['follow-gid'] })
+    const task = makeTask({
+      bittorrent: {},
+    })
 
     handleTaskComplete(task, deps)
 
@@ -129,7 +138,7 @@ describe('handleTaskComplete', () => {
 
     handleTaskComplete(task, deps)
 
-    expect(deps.messageSuccess).toHaveBeenCalledWith('Ubuntu 24.04 completed')
+    expect(deps.messageSuccess).toHaveBeenCalledWith('Saved: Ubuntu 24.04')
   })
 
   it('sends render function when onOpenFile callback is provided', () => {
@@ -170,9 +179,9 @@ describe('handleTaskComplete', () => {
   })
 })
 
-// ── handleBtComplete ─────────────────────────────────────────────────
+// ── handleSharingComplete ─────────────────────────────────────────────
 
-describe('handleBtComplete', () => {
+describe('handleSharingComplete', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -181,10 +190,20 @@ describe('handleBtComplete', () => {
     const deps = makeDeps()
     const task = makeTask({ bittorrent: { info: { name: 'Big Archive' } } })
 
-    handleBtComplete(task, deps)
+    handleSharingComplete(task, 'bt', deps)
 
     expect(deps.messageSuccess).toHaveBeenCalledOnce()
-    expect(deps.messageSuccess).toHaveBeenCalledWith('Big Archive — download complete, seeding...')
+    expect(deps.messageSuccess).toHaveBeenCalledWith('Seeding: Big Archive')
+  })
+
+  it('uses ED2K sharing wording for ED2K tasks', () => {
+    const deps = makeDeps()
+    const task = makeTask({ ed2k: { name: 'Big Archive', hash: 'ed2khash' } })
+
+    handleSharingComplete(task, 'ed2k', deps)
+
+    expect(deps.messageSuccess).toHaveBeenCalledOnce()
+    expect(deps.messageSuccess).toHaveBeenCalledWith('Sharing: test-file.zip')
   })
 
   it('sends render function when action callbacks are provided', () => {
@@ -193,7 +212,7 @@ describe('handleBtComplete', () => {
     const deps = makeDeps({ onOpenFile, onShowInFolder })
     const task = makeTask({ bittorrent: { info: { name: 'Big Archive' } } })
 
-    handleBtComplete(task, deps)
+    handleSharingComplete(task, 'bt', deps)
 
     expect(deps.messageSuccess).toHaveBeenCalledOnce()
     const arg = (deps.messageSuccess as ReturnType<typeof vi.fn>).mock.calls[0][0]
@@ -208,15 +227,18 @@ describe('handleTaskError', () => {
     vi.clearAllMocks()
   })
 
-  it('logs error notification path without sending start notification', () => {
+  it('sends error toast with the same task and reason format as native notification', () => {
+    const deps = makeDeps()
     const task = makeTask({
       status: 'error',
       errorCode: '6',
       errorMessage: 'Network problem',
     })
 
-    handleTaskError(task, 'test-file.zip: Network problem')
+    handleTaskError(task, 'Network problem', deps)
 
+    expect(deps.messageError).toHaveBeenCalledOnce()
+    expect(deps.messageError).toHaveBeenCalledWith('test-file.zip: Network problem')
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 })
@@ -228,10 +250,10 @@ function makeStartDeps(overrides: Partial<StartNotifyDeps> = {}): StartNotifyDep
     messageInfo: vi.fn(),
     t: vi.fn((key: string, params?: Record<string, unknown>) => {
       if (key === 'task.download-start-message' && params?.taskName) {
-        return `Started downloading ${params.taskName}`
+        return `Downloading: ${params.taskName}`
       }
       if (key === 'task.download-batch-start-message' && params?.taskName) {
-        return `Started downloading ${params.taskName} and ${params.count} other task(s)`
+        return `Downloading: ${params.taskName} and ${params.count} other task(s)`
       }
       return key
     }) as unknown as StartNotifyDeps['t'],
@@ -250,7 +272,7 @@ describe('handleTaskStart', () => {
     handleTaskStart(['movie.mp4'], deps)
 
     expect(deps.messageInfo).toHaveBeenCalledOnce()
-    expect(deps.messageInfo).toHaveBeenCalledWith('Started downloading movie.mp4')
+    expect(deps.messageInfo).toHaveBeenCalledWith('Downloading: movie.mp4')
   })
 
   it('delegates single-task OS notification to Rust', () => {
@@ -270,7 +292,7 @@ describe('handleTaskStart', () => {
     handleTaskStart(['a.zip', 'b.torrent', 'c.iso'], deps)
 
     expect(deps.messageInfo).toHaveBeenCalledOnce()
-    expect(deps.messageInfo).toHaveBeenCalledWith('Started downloading a.zip and 2 other task(s)')
+    expect(deps.messageInfo).toHaveBeenCalledWith('Downloading: a.zip and 2 other task(s)')
   })
 
   it('delegates batch OS notification to Rust', () => {

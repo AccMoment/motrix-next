@@ -8,6 +8,15 @@ use std::net::{TcpListener, UdpSocket};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_store::StoreExt;
 
+pub(crate) const DEFAULT_RPC_PORT: u16 = 29100;
+pub(crate) const DEFAULT_EXTENSION_API_PORT: u16 = 29110;
+pub(crate) const DEFAULT_BT_PORT: u16 = 29120;
+pub(crate) const DEFAULT_DHT_PORT: u16 = 29130;
+pub(crate) const DEFAULT_ED2K_PORT: u16 = 29140;
+pub(crate) const DEFAULT_ED2K_UDP_PORT: u16 = 29150;
+const DEFAULT_RECOVERY_RANGE_START: u16 = 29000;
+const DEFAULT_RECOVERY_RANGE_END: u16 = 29999;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum PortKind {
@@ -16,6 +25,7 @@ pub(crate) enum PortKind {
     Bt,
     Dht,
     Ed2k,
+    Ed2kUdp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,10 +58,16 @@ struct PortRecoveryPolicy {
     bt: bool,
     dht: bool,
     ed2k: bool,
+    ed2k_udp: bool,
 }
 
-const ENGINE_PORT_KINDS: [PortKind; 4] =
-    [PortKind::Rpc, PortKind::Bt, PortKind::Dht, PortKind::Ed2k];
+const ENGINE_PORT_KINDS: [PortKind; 5] = [
+    PortKind::Rpc,
+    PortKind::Bt,
+    PortKind::Dht,
+    PortKind::Ed2k,
+    PortKind::Ed2kUdp,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,14 +106,15 @@ fn default_recovery_policy(enabled: bool) -> PortRecoveryPolicy {
     PortRecoveryPolicy {
         enabled,
         range: PortRange {
-            start: 30000,
-            end: 39999,
+            start: DEFAULT_RECOVERY_RANGE_START,
+            end: DEFAULT_RECOVERY_RANGE_END,
         },
         rpc: true,
         extension_api: true,
         bt: true,
         dht: true,
         ed2k: true,
+        ed2k_udp: true,
     }
 }
 
@@ -106,45 +123,73 @@ fn spec_for(kind: PortKind) -> PortSpec {
         PortKind::Rpc => PortSpec {
             prefs_key: "rpcListenPort",
             system_key: "rpc-listen-port",
-            fallback: 16800,
+            fallback: DEFAULT_RPC_PORT,
             transport: PortTransport::Tcp,
             allows_zero: false,
         },
         PortKind::ExtensionApi => PortSpec {
             prefs_key: "extensionApiPort",
             system_key: "",
-            fallback: 16801,
+            fallback: DEFAULT_EXTENSION_API_PORT,
             transport: PortTransport::Tcp,
             allows_zero: false,
         },
         PortKind::Bt => PortSpec {
             prefs_key: "listenPort",
             system_key: "listen-port",
-            fallback: 21301,
+            fallback: DEFAULT_BT_PORT,
             transport: PortTransport::Tcp,
             allows_zero: false,
         },
         PortKind::Dht => PortSpec {
             prefs_key: "dhtListenPort",
             system_key: "dht-listen-port",
-            fallback: 26701,
+            fallback: DEFAULT_DHT_PORT,
             transport: PortTransport::Udp,
             allows_zero: false,
         },
         PortKind::Ed2k => PortSpec {
             prefs_key: "ed2kListenPort",
             system_key: "ed2k-listen-port",
-            fallback: 4662,
+            fallback: DEFAULT_ED2K_PORT,
             transport: PortTransport::Tcp,
+            allows_zero: true,
+        },
+        PortKind::Ed2kUdp => PortSpec {
+            prefs_key: "ed2kUdpListenPort",
+            system_key: "ed2k-udp-listen-port",
+            fallback: DEFAULT_ED2K_UDP_PORT,
+            transport: PortTransport::Udp,
             allows_zero: true,
         },
     }
 }
 
-pub(crate) fn aria2_bt_bind_error_line(line: &str) -> bool {
-    line.contains("failed to bind TCP port")
-        || line.contains("failed to bind UDP port")
-        || line.contains("Errors occurred while binding port")
+pub(crate) fn aria2_runtime_bind_error_kind(line: &str) -> Option<PortKind> {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("rpc") {
+        return None;
+    }
+    let is_bind_error = lower.contains("failed to bind tcp port")
+        || lower.contains("failed to bind udp port")
+        || lower.contains("errors occurred while binding port");
+    if !is_bind_error {
+        return None;
+    }
+    if lower.contains("dht") {
+        return Some(PortKind::Dht);
+    }
+    if lower.contains("ed2k") {
+        return if lower.contains("udp") {
+            Some(PortKind::Ed2kUdp)
+        } else {
+            Some(PortKind::Ed2k)
+        };
+    }
+    if lower.contains("bittorrent") || lower.contains("btsetup") {
+        return Some(PortKind::Bt);
+    }
+    None
 }
 
 fn recovery_policy_from_preferences(prefs: &serde_json::Value) -> PortRecoveryPolicy {
@@ -192,6 +237,7 @@ fn recovery_policy_from_preferences(prefs: &serde_json::Value) -> PortRecoveryPo
         bt: read_bool("bt", defaults.bt),
         dht: read_bool("dht", defaults.dht),
         ed2k: read_bool("ed2k", defaults.ed2k),
+        ed2k_udp: read_bool("ed2kUdp", defaults.ed2k_udp),
     }
 }
 
@@ -203,12 +249,26 @@ fn recovery_enabled_for(policy: PortRecoveryPolicy, kind: PortKind) -> bool {
             PortKind::Bt => policy.bt,
             PortKind::Dht => policy.dht,
             PortKind::Ed2k => policy.ed2k,
+            PortKind::Ed2kUdp => policy.ed2k_udp,
         }
 }
 
 fn choose_available_port(policy: PortRecoveryPolicy, reserved: &BTreeSet<u16>) -> Option<u16> {
     (policy.range.start..=policy.range.end)
         .find(|port| !reserved.contains(port) && tcp_available(*port) && udp_available(*port))
+}
+
+fn choose_replacement_port(
+    policy: PortRecoveryPolicy,
+    reserved: &BTreeSet<u16>,
+    old_port: u16,
+) -> Option<u16> {
+    (policy.range.start..=policy.range.end).find(|port| {
+        *port != old_port
+            && !reserved.contains(port)
+            && tcp_available(*port)
+            && udp_available(*port)
+    })
 }
 
 pub(crate) fn reconcile_engine_ports(app: &AppHandle) -> Result<Vec<PortSwitch>, AppError> {
@@ -248,7 +308,7 @@ pub(crate) fn reconcile_engine_ports(app: &AppHandle) -> Result<Vec<PortSwitch>,
             continue;
         }
         reserved.remove(&port);
-        let Some(new_port) = choose_available_port(policy, &reserved) else {
+        let Some(new_port) = choose_replacement_port(policy, &reserved, port) else {
             emit_failure(
                 app,
                 PortSwitchFailure {
@@ -278,7 +338,10 @@ pub(crate) fn reconcile_engine_ports(app: &AppHandle) -> Result<Vec<PortSwitch>,
     Ok(switches)
 }
 
-pub(crate) fn reconcile_bt_ports(app: &AppHandle) -> Result<Vec<PortSwitch>, AppError> {
+pub(crate) fn reconcile_runtime_ports(
+    app: &AppHandle,
+    kinds: &[PortKind],
+) -> Result<Vec<PortSwitch>, AppError> {
     let prefs_store = app
         .store("config.json")
         .map_err(|e| AppError::Store(format!("Failed to open config.json: {e}")))?;
@@ -293,8 +356,16 @@ pub(crate) fn reconcile_bt_ports(app: &AppHandle) -> Result<Vec<PortSwitch>, App
     let mut next = current;
     let mut switches = Vec::new();
 
-    for kind in [PortKind::Bt, PortKind::Dht] {
+    for kind in kinds {
+        let kind = *kind;
         let old_port = next.get(kind);
+        let spec = spec_for(kind);
+        if spec.allows_zero && old_port == 0 {
+            continue;
+        }
+        if port_available(old_port, spec.transport) {
+            continue;
+        }
         if !recovery_enabled_for(policy, kind) {
             emit_failure(
                 app,
@@ -308,7 +379,7 @@ pub(crate) fn reconcile_bt_ports(app: &AppHandle) -> Result<Vec<PortSwitch>, App
             continue;
         }
         reserved.remove(&old_port);
-        let Some(new_port) = choose_available_port(policy, &reserved) else {
+        let Some(new_port) = choose_replacement_port(policy, &reserved, old_port) else {
             emit_failure(
                 app,
                 PortSwitchFailure {
@@ -418,6 +489,7 @@ struct PortSnapshot {
     bt: u16,
     dht: u16,
     ed2k: u16,
+    ed2k_udp: u16,
 }
 
 impl PortSnapshot {
@@ -448,14 +520,26 @@ impl PortSnapshot {
                 spec_for(PortKind::Ed2k).prefs_key,
                 spec_for(PortKind::Ed2k).fallback,
             ),
+            ed2k_udp: read_u16(
+                prefs,
+                spec_for(PortKind::Ed2kUdp).prefs_key,
+                spec_for(PortKind::Ed2kUdp).fallback,
+            ),
         }
     }
 
     fn all_ports(self) -> BTreeSet<u16> {
-        [self.rpc, self.extension_api, self.bt, self.dht, self.ed2k]
-            .into_iter()
-            .filter(|port| *port > 0)
-            .collect()
+        [
+            self.rpc,
+            self.extension_api,
+            self.bt,
+            self.dht,
+            self.ed2k,
+            self.ed2k_udp,
+        ]
+        .into_iter()
+        .filter(|port| *port > 0)
+        .collect()
     }
 
     fn get(self, kind: PortKind) -> u16 {
@@ -465,6 +549,7 @@ impl PortSnapshot {
             PortKind::Bt => self.bt,
             PortKind::Dht => self.dht,
             PortKind::Ed2k => self.ed2k,
+            PortKind::Ed2kUdp => self.ed2k_udp,
         }
     }
 
@@ -475,6 +560,7 @@ impl PortSnapshot {
             PortKind::Bt => self.bt = port,
             PortKind::Dht => self.dht = port,
             PortKind::Ed2k => self.ed2k = port,
+            PortKind::Ed2kUdp => self.ed2k_udp = port,
         }
     }
 }
@@ -505,6 +591,7 @@ fn persist_snapshot<R: tauri::Runtime>(
     obj.insert("listenPort".into(), json!(snapshot.bt));
     obj.insert("dhtListenPort".into(), json!(snapshot.dht));
     obj.insert("ed2kListenPort".into(), json!(snapshot.ed2k));
+    obj.insert("ed2kUdpListenPort".into(), json!(snapshot.ed2k_udp));
     obj.insert("autoChangeConflictingPorts".into(), json!(true));
 
     prefs_store.set("preferences", prefs.clone());
@@ -516,6 +603,7 @@ fn persist_snapshot<R: tauri::Runtime>(
     system_store.set("listen-port", json!(snapshot.bt.to_string()));
     system_store.set("dht-listen-port", json!(snapshot.dht.to_string()));
     system_store.set("ed2k-listen-port", json!(snapshot.ed2k.to_string()));
+    system_store.set("ed2k-udp-listen-port", json!(snapshot.ed2k_udp.to_string()));
     system_store
         .save()
         .map_err(|e| AppError::Store(format!("Failed to save system.json: {e}")))?;
@@ -559,7 +647,13 @@ mod tests {
     fn engine_port_reconciliation_excludes_extension_api() {
         assert_eq!(
             ENGINE_PORT_KINDS,
-            [PortKind::Rpc, PortKind::Bt, PortKind::Dht, PortKind::Ed2k]
+            [
+                PortKind::Rpc,
+                PortKind::Bt,
+                PortKind::Dht,
+                PortKind::Ed2k,
+                PortKind::Ed2kUdp,
+            ]
         );
         assert!(!ENGINE_PORT_KINDS.contains(&PortKind::ExtensionApi));
     }
@@ -605,7 +699,8 @@ mod tests {
                 "extensionApi": true,
                 "bt": true,
                 "dht": false,
-                "ed2k": true
+                "ed2k": true,
+                "ed2kUdp": false
             }
         });
 
@@ -621,18 +716,60 @@ mod tests {
         assert!(!recovery_enabled_for(policy, PortKind::Rpc));
         assert!(recovery_enabled_for(policy, PortKind::ExtensionApi));
         assert!(!recovery_enabled_for(policy, PortKind::Dht));
+        assert!(!recovery_enabled_for(policy, PortKind::Ed2kUdp));
     }
 
     #[test]
-    fn aria2_bt_bind_error_line_detects_runtime_bt_port_failures() {
-        assert!(aria2_bt_bind_error_line(
-            "05/14 10:24:11 [ERROR] IPv4 BitTorrent: failed to bind TCP port 21301"
-        ));
-        assert!(aria2_bt_bind_error_line(
-            "Exception: [BtSetup.cc:212] errorCode=1 Errors occurred while binding port."
-        ));
-        assert!(!aria2_bt_bind_error_line(
-            "05/14 10:24:11 [NOTICE] IPv4 RPC: listening on TCP port 16800"
-        ));
+    fn aria2_runtime_bind_error_kind_classifies_runtime_port_failures() {
+        assert_eq!(
+            aria2_runtime_bind_error_kind(
+                "2026-05-29 10:24:11.000 [error] [BtSetup.cc:212] IPv4 BitTorrent: failed to bind TCP port 29120"
+            ),
+            Some(PortKind::Bt)
+        );
+        assert_eq!(
+            aria2_runtime_bind_error_kind(
+                "2026-05-29 10:24:11.000 [error] [DHTSetup.cc:42] IPv4 DHT: failed to bind UDP port 29130"
+            ),
+            Some(PortKind::Dht)
+        );
+        assert_eq!(
+            aria2_runtime_bind_error_kind(
+                "Exception: [BtSetup.cc:212] errorCode=1 Errors occurred while binding port."
+            ),
+            Some(PortKind::Bt)
+        );
+        assert_eq!(
+            aria2_runtime_bind_error_kind(
+                "2026-05-29 10:24:11.000 [info] [RpcBeastServer.cc:241] IPv4 RPC: listening on TCP port 29100"
+            ),
+            None
+        );
+        assert_eq!(
+            aria2_runtime_bind_error_kind(
+                "2026-05-29 22:14:21.000 [error] [RpcBeastServer.cc:228] IPv6 RPC: failed to bind TCP port 29100: Address already in use"
+            ),
+            None
+        );
+        assert_eq!(
+            aria2_runtime_bind_error_kind(
+                "Exception: [DownloadEngineFactory.cc:198] errorCode=1 Failed to setup RPC server."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn replacement_port_never_returns_the_current_port() {
+        let policy = PortRecoveryPolicy {
+            range: PortRange {
+                start: 29000,
+                end: 29002,
+            },
+            ..default_recovery_policy(true)
+        };
+        let reserved = BTreeSet::from([29001, 29002]);
+
+        assert_eq!(choose_replacement_port(policy, &reserved, 29000), None);
     }
 }

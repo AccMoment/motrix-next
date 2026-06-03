@@ -175,6 +175,24 @@ describe('useAppStore', () => {
       expect(store.addTaskVisible).toBe(true)
     })
 
+    it('showAddTaskDialog clears stale external browser context before manual entry', () => {
+      const store = useAppStore()
+      store.pendingReferer = 'https://old.example/page'
+      store.pendingCookie = 'sid=old'
+      store.pendingFilename = 'old.zip'
+      store.pendingUserAgent = 'OldUA/1.0'
+      store.pendingRequestHeaders = [{ name: 'Accept', value: 'application/octet-stream' }]
+
+      store.showAddTaskDialog()
+
+      expect(store.addTaskVisible).toBe(true)
+      expect(store.pendingReferer).toBe('')
+      expect(store.pendingCookie).toBe('')
+      expect(store.pendingFilename).toBe('')
+      expect(store.pendingUserAgent).toBe('')
+      expect(store.pendingRequestHeaders).toEqual([])
+    })
+
     it('hideAddTaskDialog sets addTaskVisible to false and clears pendingBatch', () => {
       const store = useAppStore()
       store.addTaskVisible = true
@@ -399,7 +417,7 @@ describe('useAppStore', () => {
       usePreferenceStore().config.autoSubmitFromExtension = false
     })
 
-    it('detects remote .torrent URLs with correct kind', () => {
+    it('treats remote .torrent URLs as torrent tasks', () => {
       const store = useAppStore()
       store.handleDeepLinkUrls(['https://example.com/linux.torrent'])
       expect(store.pendingBatch.map((i) => ({ kind: i.kind, source: i.source }))).toEqual([
@@ -594,6 +612,27 @@ describe('useAppStore', () => {
       expect(store.pendingFilename).toBe('')
     })
 
+    it('clears stale external metadata when the next deep link omits it', () => {
+      const store = useAppStore()
+      const firstUrl = encodeURIComponent('https://cdn.quark.cn/hash123')
+      const firstReferer = encodeURIComponent('https://pan.quark.cn')
+      const firstCookie = encodeURIComponent('__puus=abc')
+      const firstFilename = encodeURIComponent('first.zip')
+      store.handleDeepLinkUrls([
+        `motrixnext://new?url=${firstUrl}&referer=${firstReferer}&cookie=${firstCookie}&filename=${firstFilename}`,
+      ])
+      expect(store.pendingReferer).toBe('https://pan.quark.cn')
+      expect(store.pendingCookie).toBe('__puus=abc')
+      expect(store.pendingFilename).toBe('first.zip')
+
+      const secondUrl = encodeURIComponent('https://example.com/second.zip')
+      store.handleDeepLinkUrls([`motrixnext://new?url=${secondUrl}`])
+
+      expect(store.pendingReferer).toBe('')
+      expect(store.pendingCookie).toBe('')
+      expect(store.pendingFilename).toBe('')
+    })
+
     it('clears pendingFilename when hideAddTaskDialog is called', () => {
       const store = useAppStore()
       const url = encodeURIComponent('https://cdn.quark.cn/hash123')
@@ -707,26 +746,29 @@ describe('useAppStore', () => {
       expect(store.addTaskVisible).toBe(true)
     })
 
-    it('shows dialog for .torrent URLs when file auto-select is disabled', async () => {
+    it('shows AddTask for remote .torrent URLs when BT auto-select is disabled', async () => {
       const store = useAppStore()
       const { usePreferenceStore } = await import('@/stores/preference')
       const prefStore = usePreferenceStore()
       prefStore.config.autoSubmitFromExtension = true
-      prefStore.config.autoSelectAllFilesFromExtension = false
+      prefStore.config.autoSelectAllBtFilesFromExtension = false
 
       store.handleDeepLinkUrls([buildDeepLink('https://example.com/linux.torrent')])
 
       expect(store.pendingBatch).toHaveLength(1)
       expect(store.pendingBatch[0].kind).toBe('torrent')
       expect(store.addTaskVisible).toBe(true)
+      expect(submitManualUrisMock).not.toHaveBeenCalled()
+      expect(resolveUnresolvedItemsMock).not.toHaveBeenCalled()
+      expect(submitBatchItemsMock).not.toHaveBeenCalled()
     })
 
-    it('auto-submits torrent URLs when file auto-select is enabled', async () => {
+    it('auto-submits remote .torrent URLs when BT auto-select is enabled', async () => {
       const store = useAppStore()
       const { usePreferenceStore } = await import('@/stores/preference')
       const prefStore = usePreferenceStore()
       prefStore.config.autoSubmitFromExtension = true
-      prefStore.config.autoSelectAllFilesFromExtension = true
+      prefStore.config.autoSelectAllBtFilesFromExtension = true
 
       store.handleDeepLinkUrls([buildDeepLink('https://example.com/linux.torrent')])
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -742,7 +784,7 @@ describe('useAppStore', () => {
       const { usePreferenceStore } = await import('@/stores/preference')
       const prefStore = usePreferenceStore()
       prefStore.config.autoSubmitFromExtension = true
-      prefStore.config.autoSelectAllFilesFromExtension = true
+      prefStore.config.autoSelectAllBtFilesFromExtension = true
 
       store.handleDeepLinkUrls([buildDeepLink('magnet:?xt=urn:btih:abc123')])
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -757,16 +799,17 @@ describe('useAppStore', () => {
       const { usePreferenceStore } = await import('@/stores/preference')
       const prefStore = usePreferenceStore()
       prefStore.config.autoSubmitFromExtension = true
+      prefStore.config.autoSelectAllBtFilesFromExtension = false
 
       store.handleDeepLinkUrls([
         buildDeepLink('https://example.com/file.zip'),
         buildDeepLink('https://example.com/linux.torrent'),
       ])
 
-      // file.zip auto-submitted, linux.torrent goes to dialog
       expect(store.pendingBatch).toHaveLength(1)
-      expect(store.pendingBatch[0].source).toBe('https://example.com/linux.torrent')
+      expect(store.pendingBatch[0].kind).toBe('torrent')
       expect(store.addTaskVisible).toBe(true)
+      expect(submitManualUrisMock).toHaveBeenCalledTimes(1)
     })
 
     it('does not open dialog when all items are auto-submitted', async () => {
@@ -781,7 +824,7 @@ describe('useAppStore', () => {
       expect(store.addTaskVisible).toBe(false)
     })
 
-    it('still sets pendingReferer even when auto-submitting', async () => {
+    it('passes referer through auto-submit without retaining pending metadata', async () => {
       const store = useAppStore()
       const { usePreferenceStore } = await import('@/stores/preference')
       const prefStore = usePreferenceStore()
@@ -789,11 +832,14 @@ describe('useAppStore', () => {
 
       store.handleDeepLinkUrls([buildDeepLink('https://example.com/file.zip', 'https://example.com')])
 
-      // referer should still be extracted (used in auto-submit form)
-      expect(store.pendingReferer).toBe('https://example.com')
+      const submittedForm = submitManualUrisMock.mock.calls[0][0]
+      const submittedOptions = submitManualUrisMock.mock.calls[0][1]
+      expect(submittedForm.referer).toBe('https://example.com')
+      expect(submittedOptions.referer).toBe('https://example.com')
+      expect(store.pendingReferer).toBe('')
     })
 
-    it('forwards cookie to aria2 header when auto-submitting', async () => {
+    it('passes cookie through auto-submit without retaining pending metadata', async () => {
       const store = useAppStore()
       const { usePreferenceStore } = await import('@/stores/preference')
       const prefStore = usePreferenceStore()
@@ -801,8 +847,86 @@ describe('useAppStore', () => {
 
       store.handleDeepLinkUrls([buildDeepLink('https://cdn.quark.cn/file.zip', 'https://pan.quark.cn', 'auth=secret')])
 
-      // Cookie should be extracted even during auto-submit
-      expect(store.pendingCookie).toBe('auth=secret')
+      const submittedForm = submitManualUrisMock.mock.calls[0][0]
+      const submittedOptions = submitManualUrisMock.mock.calls[0][1]
+      expect(submittedForm.cookie).toBe('auth=secret')
+      expect(submittedOptions.header).toContain('Cookie: auth=secret')
+      expect(store.pendingCookie).toBe('')
+    })
+
+    it('auto-submits structured extension input with captured user agent and request headers', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+      prefStore.config.userAgent = 'ConfiguredUA/1.0'
+
+      store.handleExternalInputs([
+        {
+          url: 'https://drivers.amd.com/file.exe',
+          finalUrl: 'https://drivers.amd.com/file.exe',
+          referer: 'https://www.amd.com/support',
+          cookie: 'auth=secret',
+          userAgent: 'BrowserUA/1.0',
+          requestHeaders: [{ name: 'Accept', value: 'application/octet-stream' }],
+          filename: 'driver.exe',
+          source: 'http-api',
+        },
+      ])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const submittedForm = submitManualUrisMock.mock.calls[0][0]
+      const submittedOptions = submitManualUrisMock.mock.calls[0][1]
+      expect(submittedForm.userAgent).toBe('BrowserUA/1.0')
+      expect(submittedForm.requestHeaders).toEqual([{ name: 'Accept', value: 'application/octet-stream' }])
+      expect(submittedOptions).toMatchObject({
+        'user-agent': 'BrowserUA/1.0',
+        referer: 'https://www.amd.com/support',
+        header: ['Accept: application/octet-stream', 'Cookie: auth=secret'],
+      })
+    })
+
+    it('falls back to configured user agent when structured input has none', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = true
+      prefStore.config.userAgent = 'ConfiguredUA/1.0'
+
+      store.handleExternalInputs([
+        {
+          url: 'https://example.com/file.zip',
+          source: 'http-api',
+        },
+      ])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const submittedOptions = submitManualUrisMock.mock.calls[0][1]
+      expect(submittedOptions['user-agent']).toBe('ConfiguredUA/1.0')
+    })
+
+    it('keeps structured request headers for manual dialog submission', async () => {
+      const store = useAppStore()
+      const { usePreferenceStore } = await import('@/stores/preference')
+      const prefStore = usePreferenceStore()
+      prefStore.config.autoSubmitFromExtension = false
+
+      store.handleExternalInputs([
+        {
+          url: 'https://example.com/file.zip',
+          userAgent: 'BrowserUA/1.0',
+          requestHeaders: [{ name: 'Accept-Language', value: 'en-US,en;q=0.9' }],
+          source: 'http-api',
+        },
+      ])
+
+      expect(store.pendingBatch).toHaveLength(1)
+      expect(store.pendingBatch[0].browserContext).toMatchObject({
+        userAgent: 'BrowserUA/1.0',
+        requestHeaders: [{ name: 'Accept-Language', value: 'en-US,en;q=0.9' }],
+      })
+      expect(store.pendingUserAgent).toBe('BrowserUA/1.0')
+      expect(store.pendingRequestHeaders).toEqual([{ name: 'Accept-Language', value: 'en-US,en;q=0.9' }])
     })
 
     it('non-extension deep links (file://, http://) are unaffected by auto-submit', async () => {

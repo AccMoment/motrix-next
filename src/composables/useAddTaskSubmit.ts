@@ -26,11 +26,28 @@ import {
 } from '@shared/utils/batchHelpers'
 import { buildOuts } from '@shared/utils/rename'
 import { invoke } from '@tauri-apps/api/core'
-import { logger } from '@shared/logger'
-import type { Aria2EngineOptions, BatchItem, FileCategory, ProxyConfig } from '@shared/types'
+import { formatLogFields, logger } from '@shared/logger'
+import type {
+  Aria2EngineOptions,
+  BatchItem,
+  BrowserRequestHeader,
+  ExternalDownloadContext,
+  FileCategory,
+  ProxyConfig,
+} from '@shared/types'
 import { isMagnetUri } from '@/composables/useMagnetFlow'
-import { sanitizeHttpHeaderOptions } from '@shared/utils/headerSanitize'
+import {
+  sanitizeBrowserRequestHeaders,
+  sanitizeBrowserRequestHeadersWithDiagnostics,
+  sanitizeHttpHeaderOptions,
+  sanitizeSingleHeaderValue,
+} from '@shared/utils/headerSanitize'
+import { summarizeHeaderForwarding } from '@shared/utils/externalInputDiagnostics'
 import { getErrorMessage } from '@shared/utils/errorMessage'
+import { buildTaskProxyOptions, getDownloadProxy, type TaskProxyMode } from '@shared/utils/proxyPolicy'
+import { resolveUserAgentFromContext } from '@shared/utils/userAgentPolicy'
+
+export { getDownloadProxy } from '@shared/utils/proxyPolicy'
 
 export interface AddTaskForm {
   uris: string
@@ -44,12 +61,19 @@ export interface AddTaskForm {
   saveHttpAuth: boolean
   referer: string
   cookie: string
-  /** Proxy mode: none (no proxy), global (use global), custom (user-entered). */
-  proxyMode: 'none' | 'global' | 'custom'
-  /** User-entered proxy address when proxyMode is 'custom'. */
+  /** Proxy mode for this task. */
+  proxyMode: TaskProxyMode
+  /** User-entered proxy address when proxyMode is 'manual'. */
   customProxy: string
-  /** Injected from the preference store — not user-editable in the form. */
-  globalProxyServer?: string
+  customProxyUsername?: string
+  customProxyPassword?: string
+  /** Injected from the preference store; used for manual proxy bypass inheritance. */
+  appProxy?: ProxyConfig
+  defaultUserAgent?: string
+  userAgentProfiles?: import('@shared/types').UserAgentProfile[]
+  userAgentRules?: import('@shared/types').UserAgentRule[]
+  requestHeaders: BrowserRequestHeader[]
+  uriRequestContexts?: Record<string, ExternalDownloadContext>
 }
 
 export interface UseAddTaskSubmitOptions {
@@ -72,13 +96,22 @@ export interface ManualUriSubmitResult {
  * Builds aria2 engine options from the add-task form.
  * Pure function — no side effects, fully testable.
  */
-export function buildEngineOptions(form: AddTaskForm): Aria2EngineOptions {
-  const headers = sanitizeHttpHeaderOptions({
-    userAgent: form.userAgent,
-    referer: form.referer,
-    cookie: form.cookie,
-    authorization: form.authorization,
-  })
+export function buildEngineOptions(form: AddTaskForm, context?: ExternalDownloadContext): Aria2EngineOptions {
+  const resolvedUserAgent = resolveUserAgentFromContext({
+    formUserAgent: form.userAgent,
+    context,
+    url: context?.url ?? form.uris,
+    finalUrl: context?.finalUrl,
+    defaultUserAgent: form.defaultUserAgent,
+    profiles: form.userAgentProfiles ?? [],
+    rules: form.userAgentRules ?? [],
+  }).userAgent
+  const headers = {
+    userAgent: sanitizeSingleHeaderValue(resolvedUserAgent),
+    referer: sanitizeSingleHeaderValue(context?.referer ?? form.referer),
+    cookie: sanitizeSingleHeaderValue(context?.cookie ?? form.cookie),
+    authorization: sanitizeSingleHeaderValue(form.authorization),
+  }
   const options: Aria2EngineOptions = {
     dir: form.dir,
     split: String(form.split),
@@ -91,7 +124,8 @@ export function buildEngineOptions(form: AddTaskForm): Aria2EngineOptions {
   if (headers.userAgent) options['user-agent'] = headers.userAgent
   if (headers.referer) options.referer = headers.referer
 
-  const headerLines: string[] = []
+  const browserHeaders = sanitizeBrowserRequestHeaders(context?.requestHeaders ?? form.requestHeaders)
+  const headerLines: string[] = browserHeaders.map((header) => `${header.name}: ${header.value}`)
   if (headers.cookie) headerLines.push(`Cookie: ${headers.cookie}`)
   if (headers.authorization) headerLines.push(`Authorization: ${headers.authorization}`)
   if (headerLines.length > 0) options.header = headerLines
@@ -103,49 +137,23 @@ export function buildEngineOptions(form: AddTaskForm): Aria2EngineOptions {
     options['http-passwd'] = httpAuthPassword
   }
 
-  // Always set all-proxy — empty string clears any inherited global proxy.
-  // Without this, mode 'none' would silently inherit the engine-level proxy.
-  options['all-proxy'] = resolveAddTaskProxy(form)
+  Object.assign(
+    options,
+    buildTaskProxyOptions(
+      form.proxyMode,
+      form.customProxy,
+      form.appProxy,
+      form.customProxyUsername,
+      form.customProxyPassword,
+    ),
+  )
   return options
 }
 
-/**
- * Resolves the effective proxy URL from the tri-state add-task form.
- * Mirrors the resolveProxy() pattern in useTaskDetailOptions.
- */
-function resolveAddTaskProxy(form: AddTaskForm): string {
-  if (form.proxyMode === 'global') return form.globalProxyServer ?? ''
-  if (form.proxyMode === 'custom') return form.customProxy
-  return ''
-}
-
-/**
- * Returns true if the global proxy is configured (enabled with a non-empty server).
- * Used by the AddTask UI to determine whether the proxy checkbox should be available.
- * Pure function — no side effects.
- */
-export function isGlobalProxyConfigured(proxy: ProxyConfig): boolean {
-  return proxy.enable && !!proxy.server.trim()
-}
-
-/**
- * Returns true if the global proxy is active AND its scope includes downloads.
- * When true, aria2 already routes all downloads through the proxy at the engine
- * level, so the per-task checkbox defaults to checked.
- * Pure function — no side effects.
- */
-export function isGlobalDownloadProxyActive(proxy: ProxyConfig): boolean {
-  return isGlobalProxyConfigured(proxy) && Array.isArray(proxy.scope) && proxy.scope.includes('download')
-}
-
-/**
- * Returns the proxy server URL when the download proxy is active,
- * or `undefined` otherwise.  Used to pass the proxy to Rust commands
- * (`resolve_filename`, `fetch_remote_bytes`) that make external HTTP
- * requests on behalf of the download flow.
- */
-export function getDownloadProxy(proxy: ProxyConfig): string | undefined {
-  return isGlobalDownloadProxyActive(proxy) ? proxy.server : undefined
+function summarizeSubmitHeaderForwarding(form: AddTaskForm, context?: ExternalDownloadContext) {
+  return summarizeHeaderForwarding(
+    sanitizeBrowserRequestHeadersWithDiagnostics(context?.requestHeaders ?? form.requestHeaders).diagnostics,
+  )
 }
 
 /**
@@ -221,10 +229,16 @@ export async function submitManualUris(
   const allUris = normalizeUriLines(form.uris)
   logger.info(
     'submitManualUris',
-    `regular=${allUris.filter((u) => !isMagnetUri(u)).length} magnet=${allUris.filter(isMagnetUri).length}`,
+    formatLogFields({
+      regular: allUris.filter((u) => !isMagnetUri(u)).length,
+      magnet: allUris.filter(isMagnetUri).length,
+      hasUserAgent: Boolean(form.userAgent),
+      hasReferer: Boolean(form.referer),
+      hasCookie: Boolean(form.cookie),
+      ...summarizeSubmitHeaderForwarding(form),
+    }),
   )
 
-  // Partition into magnet and regular URIs
   const magnetUris = allUris.filter(isMagnetUri)
   const regularUris = allUris.filter((uri) => !isMagnetUri(uri))
   const submittedTaskNames: string[] = []
@@ -259,9 +273,10 @@ export async function submitManualUris(
           const pathFilename = extractDecodedFilename(uri)
           if (!pathFilename || hasExtension(pathFilename)) return ''
           try {
+            const uriContext = form.uriRequestContexts?.[uri]
             const sanitizedHeaders = sanitizeHttpHeaderOptions({
-              referer: form.referer,
-              cookie: form.cookie,
+              referer: uriContext?.referer ?? form.referer,
+              cookie: uriContext?.cookie ?? form.cookie,
             })
             const args: {
               url: string
@@ -280,7 +295,21 @@ export async function submitManualUris(
           }
         }),
       )
-      await taskStore.addUri({ uris: regularUris, outs, options, fileCategory })
+      const contextEntries = form.uriRequestContexts ?? {}
+      const hasPerUriContext = regularUris.some((uri) => contextEntries[uri])
+      if (hasPerUriContext) {
+        for (let index = 0; index < regularUris.length; index++) {
+          const uri = regularUris[index]
+          await taskStore.addUri({
+            uris: [uri],
+            outs: [outs[index] ?? ''],
+            options: buildEngineOptions(form, contextEntries[uri]),
+            fileCategory,
+          })
+        }
+      } else {
+        await taskStore.addUri({ uris: regularUris, outs, options, fileCategory })
+      }
       const optionOut = typeof options.out === 'string' ? options.out : ''
       submittedTaskNames.push(
         ...regularUris.map((uri, index) => resolveSubmittedTaskName(uri, optionOut || outs[index])),

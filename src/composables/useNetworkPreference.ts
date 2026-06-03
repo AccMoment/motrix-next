@@ -1,17 +1,23 @@
 /**
  * @fileoverview Pure functions for the Network preference tab.
  *
- * Manages: proxy, port mapping (UPnP, BT/DHT ports), transfer parameters
- * (connect-timeout, timeout, file-allocation), and User-Agent. All keys
- * here map to aria2 engine options via buildNetworkSystemConfig.
+ * Manages: proxy, port mapping (UPnP, BT/DHT ports), P2P sharing policy,
+ * transfer parameters (connect-timeout, timeout, file-allocation, async DNS), and User-Agent.
+ * All keys here map to aria2 engine options via buildNetworkSystemConfig.
  *
  * Proxy validation logic is co-located here since it is only used in
  * this tab's save flow.
  */
-import type { AppConfig, PortConflictRecoveryConfig } from '@shared/types'
-import { PROXY_SCOPES, PROXY_SCOPE_OPTIONS, DEFAULT_APP_CONFIG as D } from '@shared/constants'
+import type { AppConfig, PortConflictRecoveryConfig, UserAgentProfile, UserAgentRule } from '@shared/types'
+import {
+  PORT_RECOVERY_RANGE_END,
+  PORT_RECOVERY_RANGE_START,
+  PROXY_SCOPE_OPTIONS,
+  DEFAULT_APP_CONFIG as D,
+} from '@shared/constants'
 import { generateRandomInt } from '@shared/utils'
 import { isValidAria2ProxyUrl, UNSUPPORTED_PROXY_SCHEME_RE } from '@shared/utils/aria2Proxy'
+import { buildDownloadProxyOptions, normalizeProxyMode, type EngineProxyMode } from '@shared/utils/proxyPolicy'
 
 export { isValidAria2ProxyUrl } from '@shared/utils/aria2Proxy'
 
@@ -20,8 +26,10 @@ export { isValidAria2ProxyUrl } from '@shared/utils/aria2Proxy'
 export interface NetworkForm {
   [key: string]: unknown
   proxy: {
-    enable: boolean
+    mode: EngineProxyMode
     server: string
+    username?: string
+    password?: string
     bypass: string
     scope: string[]
   }
@@ -30,10 +38,17 @@ export interface NetworkForm {
   portConflictRecovery: PortConflictRecoveryConfig
   listenPort: number
   dhtListenPort: number
+  sharingMode: 'stop-by-condition' | 'manual-stop'
+  shareRatio: number
+  shareTime: number
   connectTimeout: number
   timeout: number
   fileAllocation: string
+  asyncDns: boolean
   userAgent: string
+  userAgentProfiles: UserAgentProfile[]
+  userAgentRules: UserAgentRule[]
+  recentUserAgentProfileIds: string[]
 }
 
 function buildPortConflictRecovery(config: AppConfig): PortConflictRecoveryConfig {
@@ -48,6 +63,7 @@ function buildPortConflictRecovery(config: AppConfig): PortConflictRecoveryConfi
     bt: saved?.bt ?? defaults.bt,
     dht: saved?.dht ?? defaults.dht,
     ed2k: saved?.ed2k ?? defaults.ed2k,
+    ed2kUdp: saved?.ed2kUdp ?? defaults.ed2kUdp,
   }
 }
 
@@ -61,8 +77,10 @@ export function buildNetworkForm(config: AppConfig): NetworkForm {
   const proxy = config.proxy ?? D.proxy
   return {
     proxy: {
-      enable: proxy.enable ?? D.proxy.enable,
+      mode: normalizeProxyMode(proxy.mode),
       server: proxy.server ?? D.proxy.server,
+      username: proxy.username ?? D.proxy.username,
+      password: proxy.password ?? D.proxy.password,
       bypass: proxy.bypass ?? D.proxy.bypass,
       scope: proxy.scope ?? [...PROXY_SCOPE_OPTIONS],
     },
@@ -71,10 +89,17 @@ export function buildNetworkForm(config: AppConfig): NetworkForm {
     portConflictRecovery: buildPortConflictRecovery(config),
     listenPort: Number(config.listenPort ?? D.listenPort),
     dhtListenPort: Number(config.dhtListenPort ?? D.dhtListenPort),
+    sharingMode: (config.keepSharing ?? D.keepSharing) ? 'manual-stop' : 'stop-by-condition',
+    shareRatio: config.shareRatio ?? D.shareRatio,
+    shareTime: config.shareTime ?? D.shareTime,
     connectTimeout: config.connectTimeout ?? D.connectTimeout,
     timeout: config.timeout ?? D.timeout,
     fileAllocation: config.fileAllocation ?? D.fileAllocation,
+    asyncDns: config.asyncDns ?? D.asyncDns,
     userAgent: config.userAgent ?? D.userAgent,
+    userAgentProfiles: config.userAgentProfiles ?? D.userAgentProfiles,
+    userAgentRules: config.userAgentRules ?? D.userAgentRules,
+    recentUserAgentProfileIds: config.recentUserAgentProfileIds ?? D.recentUserAgentProfileIds,
   }
 }
 
@@ -83,20 +108,24 @@ export function buildNetworkForm(config: AppConfig): NetworkForm {
  * Handles proxy scope filtering: only sets all-proxy if download scope is active.
  */
 export function buildNetworkSystemConfig(f: NetworkForm): Record<string, string> {
-  const proxyForDownloads =
-    f.proxy.enable && Array.isArray(f.proxy.scope) && f.proxy.scope.includes(PROXY_SCOPES.DOWNLOAD)
-  return {
+  const keepSharing = f.sharingMode === 'manual-stop'
+  const config: Record<string, string> = {
     'listen-port': String(f.listenPort),
     'dht-listen-port': String(f.dhtListenPort),
-    'enable-dht': 'true',
-    'enable-peer-exchange': 'true',
+    'detach-share-only': 'true',
+    'seed-ratio': keepSharing ? '0' : String(f.shareRatio),
+    'keep-sharing': String(keepSharing),
     'user-agent': f.userAgent || '',
     'connect-timeout': String(f.connectTimeout),
     timeout: String(f.timeout),
-    'file-allocation': f.fileAllocation || 'none',
-    'all-proxy': proxyForDownloads ? f.proxy.server : '',
-    'no-proxy': proxyForDownloads ? f.proxy.bypass || '' : '',
+    'file-allocation': f.fileAllocation || 'prealloc',
+    'async-dns': String(!!f.asyncDns),
+    ...buildDownloadProxyOptions(f.proxy),
   }
+
+  config['seed-time'] = keepSharing ? '' : String(f.shareTime)
+
+  return config
 }
 
 /**
@@ -104,8 +133,11 @@ export function buildNetworkSystemConfig(f: NetworkForm): Record<string, string>
  * Preserves port values as numbers and proxy as nested object.
  */
 export function transformNetworkForStore(f: NetworkForm): Partial<AppConfig> {
+  const data = { ...f } as Partial<AppConfig> & Record<string, unknown>
+  delete data.sharingMode
+  data.keepSharing = f.sharingMode === 'manual-stop'
   return {
-    ...f,
+    ...data,
     autoChangeConflictingPorts: f.portConflictRecovery.enabled,
   }
 }
@@ -128,7 +160,7 @@ export function validateNetworkForm(f: NetworkForm): string | null {
   ) {
     return 'preferences.port-conflict-recovery-invalid-range'
   }
-  if (f.proxy.enable && f.proxy.server) {
+  if (f.proxy.mode === 'manual' && f.proxy.server) {
     if (!isValidAria2ProxyUrl(f.proxy.server)) {
       return UNSUPPORTED_PROXY_SCHEME_RE.test(f.proxy.server.trim())
         ? 'preferences.proxy-unsupported-protocol'
@@ -141,9 +173,9 @@ export function validateNetworkForm(f: NetworkForm): string | null {
 // ── Port Randomization ──────────────────────────────────────────────
 
 export function randomBtPort(): number {
-  return generateRandomInt(20000, 24999)
+  return generateRandomInt(PORT_RECOVERY_RANGE_START, PORT_RECOVERY_RANGE_END + 1)
 }
 
 export function randomDhtPort(): number {
-  return generateRandomInt(25000, 29999)
+  return generateRandomInt(PORT_RECOVERY_RANGE_START, PORT_RECOVERY_RANGE_END + 1)
 }

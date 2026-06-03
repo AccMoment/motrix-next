@@ -13,7 +13,7 @@
  * `removePath()` permanently deletes files via the Rust `remove_file` command.
  * Used exclusively for internal aria2 metadata that has no user value:
  * - `.aria2` control files (piece bitmap + checksums)
- * - hex40-named `.torrent` metadata (rpc-save-upload-metadata)
+ * - hex40-named `.torrent` metadata (bt-save-metadata / rpc-save-upload-metadata)
  *
  * This mirrors aria2's native `removeControlFile()` behavior for stale
  * metadata cleanup.
@@ -24,7 +24,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from '@shared/logger'
 import { resolveOpenTarget } from '@shared/utils'
-import { cleanupTorrentMetadataFiles } from '@/composables/useDownloadCleanup'
+import { cleanupAria2MetadataFiles } from '@/composables/useDownloadCleanup'
 import type { Aria2Task } from '@shared/types'
 
 /**
@@ -51,7 +51,7 @@ export async function trashPath(path: string): Promise<boolean> {
  *
  * Used exclusively for internal aria2 metadata files:
  * - `.aria2` control files (piece bitmap + checksum — no user value)
- * - hex40-named `.torrent` metadata (aria2 rpc-save-upload-metadata cache)
+ * - hex40-named `.torrent` metadata (aria2 bt-save-metadata / rpc-save-upload-metadata cache)
  *
  * Silent no-op when the path is empty, doesn't exist, or fails.
  * Returns `true` if the file was successfully removed.
@@ -72,21 +72,18 @@ export async function removePath(path: string): Promise<boolean> {
 }
 
 /**
- * Clean up the `.aria2` control file for a completed/stopped BT task.
+ * Clean up `.aria2` control files for a completed/stopped P2P task.
  *
- * New aria2-next BT control files are named by infohash and live in the
- * download directory. Older companion control files are also removed as
- * best-effort cleanup.
+ * BT can have an infoHash-named control file in the download directory.
+ * BT and ED2K can also have companion control files next to the target path.
  *
  * Path resolution mirrors `deleteTaskFiles()` for consistency.
  *
- * Safe to call after BT download completes:
- * - From `stopSeeding()` (user manually stops)
+ * Safe to call after P2P sharing completes:
+ * - From `stopSharing()` (user manually stops)
  * - From `onTaskComplete()` (aria2 auto-stops via seed-time/seed-ratio)
  */
-export async function cleanupAria2ControlFile(task: Aria2Task): Promise<void> {
-  if (!task.bittorrent) return
-
+export async function cleanupAria2ControlFiles(task: Aria2Task): Promise<void> {
   try {
     if (task.dir && task.infoHash) {
       await removePath(`${task.dir}/${task.infoHash}.aria2`)
@@ -104,7 +101,7 @@ export async function cleanupAria2ControlFile(task: Aria2Task): Promise<void> {
 
     await removePath(target + '.aria2')
   } catch (e) {
-    logger.debug('cleanupAria2ControlFile', `cleanup failed: ${e}`)
+    logger.debug('cleanupAria2ControlFiles', `cleanup failed: ${e}`)
   }
 }
 
@@ -154,7 +151,7 @@ export async function deleteTaskFiles(task: Aria2Task): Promise<void> {
   // BT tasks: clean up the hex40-named .torrent metadata file in the download dir
   if (task.dir && task.infoHash) {
     await trashPath(`${task.dir}/${task.infoHash}.aria2`)
-    await cleanupTorrentMetadataFiles(task.dir, task.infoHash)
+    await cleanupAria2MetadataFiles(task.dir, task.infoHash)
   }
 }
 

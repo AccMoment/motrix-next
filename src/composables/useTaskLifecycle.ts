@@ -6,20 +6,13 @@
 import type { Aria2Task, Aria2File, HistoryRecord, HistoryMeta, HistoryFileSnapshot } from '@shared/types'
 import { decodePathSegment } from '@shared/utils/batchHelpers'
 import { normalizeSep } from '@shared/utils/autoArchive'
+import { isBtMetadataTask } from '@shared/utils/task'
 import { getAddedAt } from '@/composables/useTaskOrder'
 import { logger } from '@shared/logger'
 
-/** Detect BT metadata-only downloads (the intermediate magnet resolution phase).
- *
- * These tasks have `[METADATA]` in the first file path or a `followedBy`
- * field pointing to the real download. They should NOT be persisted as
- * history records. */
+/** Detect magnet tasks that are still resolving BitTorrent metadata. */
 export function isMetadataTask(task: Aria2Task): boolean {
-  if (task.followedBy && task.followedBy.length > 0) return true
-  const firstPath = task.files?.[0]?.path ?? ''
-  const firstName = firstPath.split(/[/\\]/).pop() ?? firstPath
-  const btName = task.bittorrent?.info?.name ?? ''
-  return firstPath.startsWith('[METADATA]') || firstName.startsWith('[METADATA]') || btName.startsWith('[METADATA]')
+  return isBtMetadataTask(task)
 }
 
 // ── Centralized history snapshot helpers ────────────────────────────
@@ -95,7 +88,7 @@ export function buildHistoryRecord(task: Aria2Task): HistoryRecord {
   const name = btName || (pathName ? decodePathSegment(pathName) : '') || 'Unknown'
 
   const uri = firstFile?.uris?.[0]?.uri
-  const taskType = task.bittorrent ? 'bt' : 'uri'
+  const taskType = task.bittorrent ? 'bt' : task.ed2k ? 'ed2k' : 'uri'
 
   // Build structured meta snapshot (centralised — no inline JSON.stringify elsewhere)
   const meta = buildHistoryMeta(task)
@@ -114,16 +107,16 @@ export function buildHistoryRecord(task: Aria2Task): HistoryRecord {
   }
 }
 
-/** Build a history record for a BT task entering seeding state.
+/** Build a history record for a task entering shared-upload state.
  *
- * Seeding means the download phase is complete — all pieces verified.
- * Aria2 still reports status='active' for seeders, but from the user's
+ * Shared upload means the download phase is complete and verified.
+ * Aria2 still reports status='active' for these tasks, but from the user's
  * perspective the download is done. This function overrides status to
  * 'complete' so the record correctly reflects download completion.
  *
  * Used by both the lifecycle service (automatic detection) and
- * stopSeeding (manual stop) to avoid duplicating the override logic. */
-export function buildBtCompletionRecord(task: Aria2Task): HistoryRecord {
+ * stopSharing (manual stop) to avoid duplicating the override logic. */
+export function buildSharingCompletionRecord(task: Aria2Task): HistoryRecord {
   const record = buildHistoryRecord(task)
   record.status = 'complete'
   return record
@@ -268,11 +261,6 @@ export function mergeHistoryIntoTasks(aria2Tasks: Aria2Task[], historyRecords: H
     }
     return true
   })
-
-  logger.debug(
-    'TaskLifecycle.merge',
-    `aria2=${aria2Tasks.length} history=${historyRecords.length} dedupedHistory=${historyOnly.length} result=${aria2Tasks.length + historyOnly.length}`,
-  )
 
   return [...aria2Tasks, ...historyOnly.map(historyRecordToTask)]
 }

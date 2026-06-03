@@ -6,9 +6,13 @@
  * electron-store, VS Code, Obsidian, etc.):
  *
  *   1. Store a `configVersion` integer alongside user preferences.
- *   2. On each app launch, compare stored version against CONFIG_VERSION.
+ *   2. hydrateAppConfig() compares stored version against CONFIG_VERSION.
  *   3. Execute any pending migration functions in order.
- *   4. Stamp the new version and persist.
+ *   4. Stamp the new version.
+ *
+ * This file handles semantic schema changes only. Default materialization,
+ * selective nested merges, invalid-value repair, and secret preservation
+ * belong in configHydration.ts.
  *
  * Adding a new migration:
  *   1. Append a function to the `migrations` array.
@@ -48,8 +52,7 @@ const migrations: Migration[] = [
   // ── v0 → v1 ──────────────────────────────────────────────────────
   // Backfill empty proxy.scope for users who configured proxy before
   // the scope feature was introduced (pre-#81). Without scope values,
-  // buildAdvancedSystemConfig() emits all-proxy='' and aria2 receives
-  // no proxy configuration, causing Bug #103.
+  // the download proxy settings cannot target download tasks.
   //
   // Empty scope is treated as "never explicitly configured" rather than
   // "user intentionally deselected all scopes", because the scope UI
@@ -166,15 +169,8 @@ const migrations: Migration[] = [
   },
 
   // ── v4 → v5 ──────────────────────────────────────────────────────
-  // Add ED2K as a first-class URI protocol surface.
-  //
-  // Existing users already have nested protocols/clipboard objects persisted,
-  // so default merging alone cannot add the new nested keys reliably.
+  // Add ED2K to clipboard detection.
   function migrateV5(config: Partial<AppConfig>): void {
-    if (config.protocols && config.protocols.ed2k === undefined) {
-      config.protocols.ed2k = true
-      logger.info('ConfigMigration', 'v5: backfilled protocols.ed2k')
-    }
     if (config.clipboard && config.clipboard.ed2k === undefined) {
       config.clipboard.ed2k = true
       logger.info('ConfigMigration', 'v5: backfilled clipboard.ed2k')

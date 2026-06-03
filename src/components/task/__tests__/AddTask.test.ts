@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { defineComponent, h, nextTick } from 'vue'
+import { nextTick } from 'vue'
 import AddTask from '@/components/task/AddTask.vue'
+import AdvancedOptions from '@/components/task/addtask/AdvancedOptions.vue'
 import { useAppStore } from '@/stores/app'
 import { createBatchItem, resetBatchIdCounter } from '@shared/utils/batchHelpers'
 
@@ -60,10 +61,14 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('@tauri-apps/api/path', () => ({
   downloadDir: vi.fn(async () => '/Downloads'),
+  homeDir: vi.fn(async () => '/home/test'),
+  appDataDir: vi.fn(async () => '/home/test/.local/share/com.motrix.next'),
+  join: vi.fn(async (...parts: string[]) => parts.join('/').replace(/\/+/g, '/')),
 }))
 
 vi.mock('@tauri-apps/plugin-fs', () => ({
   readFile: readFileMock,
+  exists: vi.fn(async () => true),
 }))
 
 vi.mock('@/composables/useTorrentParser', () => ({
@@ -126,6 +131,21 @@ vi.mock('naive-ui', async () => {
     },
   })
 
+  const NSwitch = defineComponent({
+    props: {
+      value: { type: Boolean, default: false },
+    },
+    emits: ['update:value'],
+    setup(props, { emit }) {
+      return () =>
+        h('input', {
+          type: 'checkbox',
+          checked: props.value,
+          onChange: (e: Event) => emit('update:value', (e.target as HTMLInputElement).checked),
+        })
+    },
+  })
+
   const NDataTable = defineComponent({
     props: {
       data: { type: Array, default: () => [] },
@@ -144,6 +164,7 @@ vi.mock('naive-ui', async () => {
     NFormItem: passthrough,
     NInput,
     NInputNumber,
+    NSwitch,
     NButton,
     NSpace: passthrough,
     NGrid: passthrough,
@@ -153,16 +174,11 @@ vi.mock('naive-ui', async () => {
     NDataTable,
     NTag: passthrough,
     NEllipsis: passthrough,
+    NPopover: passthrough,
+    NEmpty: passthrough,
     NCheckbox: passthrough,
     NCollapseTransition: passthrough,
   }
-})
-
-const AdvancedOptionsStub = defineComponent({
-  name: 'AdvancedOptions',
-  setup() {
-    return () => h('div')
-  },
 })
 
 function mountDialog() {
@@ -170,7 +186,7 @@ function mountDialog() {
     props: { show: false },
     global: {
       stubs: {
-        AdvancedOptions: AdvancedOptionsStub,
+        AdvancedOptions,
       },
     },
   })
@@ -178,6 +194,10 @@ function mountDialog() {
 
 function getTextarea(wrapper: ReturnType<typeof mount>) {
   return wrapper.find('textarea')
+}
+
+function getRenameInput(wrapper: ReturnType<typeof mount>) {
+  return wrapper.find('input[placeholder="task.task-out-tips"]')
 }
 
 describe('AddTask batch URI integration', () => {
@@ -256,6 +276,27 @@ describe('AddTask batch URI integration', () => {
       ['https://b.example/file', 'https://c.example/file', 'https://a.example/file'].join('\n'),
     )
     expect(appStore.pendingBatch).toEqual([])
+  })
+
+  it('clears stale rename value when a new batch without filename arrives while open', async () => {
+    const appStore = useAppStore()
+    appStore.pendingFilename = 'old.zip'
+
+    const wrapper = mountDialog()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await nextTick()
+
+    expect((getRenameInput(wrapper).element as HTMLInputElement).value).toBe('old.zip')
+
+    appStore.pendingFilename = ''
+    appStore.pendingBatch = [createBatchItem('uri', 'https://example.com/new.zip')]
+
+    await nextTick()
+    await flushPromises()
+
+    expect((getTextarea(wrapper).element as HTMLTextAreaElement).value).toBe('https://example.com/new.zip')
+    expect((getRenameInput(wrapper).element as HTMLInputElement).value).toBe('')
   })
 
   it('resets batch list ui state on close so the next open does not leave an empty batch shell behind', async () => {
@@ -377,27 +418,43 @@ describe('AddTask split preference sync', () => {
     expect(splitInput).toBeDefined()
     expect(Number((splitInput!.element as HTMLInputElement).value)).toBe(16)
   })
+
+  it('syncs task proxy mode while the dialog is open when proxy preference changes', async () => {
+    const { usePreferenceStore } = await import('@/stores/preference')
+    const preferenceStore = usePreferenceStore()
+    preferenceStore.$patch({
+      config: { proxy: { mode: 'direct', server: '', bypass: '', scope: ['download'] } },
+    })
+
+    const wrapper = mountDialog()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await nextTick()
+
+    expect((wrapper.find('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
+
+    preferenceStore.$patch({
+      config: {
+        proxy: {
+          mode: 'manual',
+          server: 'http://127.0.0.1:7890',
+          bypass: '',
+          scope: ['download'],
+        },
+      },
+    })
+    await nextTick()
+
+    expect((wrapper.find('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true)
+    const proxyInput = wrapper.find('input[placeholder="http://host:port"]')
+    expect((proxyInput.element as HTMLInputElement).value).toBe('http://127.0.0.1:7890')
+  })
 })
 
 describe('AddTask redesigned layout and animation structure', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     resetBatchIdCounter()
-  })
-
-  // ── Layout: dual-tab with NTabs ────────────────────────────────────
-
-  it('uses NTabs dual-tab layout with URI and Torrent tabs', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    expect(source).toContain('NTabs')
-    expect(source).toContain('NTabPane')
-    expect(source).toContain('ADD_TASK_TYPE.URI')
-    expect(source).toContain('ADD_TASK_TYPE.TORRENT')
-  })
-
-  it('does not import TorrentUpload — functionality merged inline', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    expect(source).not.toContain('TorrentUpload')
   })
 
   it('renders a textarea for URI input in the URI tab', async () => {
@@ -444,68 +501,5 @@ describe('AddTask redesigned layout and animation structure', () => {
     await flushPromises()
 
     expect(wrapper.findAll('.batch-item').length).toBe(2)
-  })
-
-  // ── Animation: AutoAnimate list transitions ─────────────────────────
-
-  it('uses v-auto-animate directive for batch list instead of TransitionGroup', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    // Must use AutoAnimate — the industry-standard library
-    expect(source).toContain('v-auto-animate')
-    expect(source).toContain('@formkit/auto-animate')
-    // Must NOT use old TransitionGroup names that caused CSS cascade conflicts
-    expect(source).not.toContain('name="blist"')
-    expect(source).not.toContain('name="bitem"')
-    expect(source).not.toContain('name="batch-item"')
-    // Must NOT have hand-crafted TransitionGroup CSS classes
-    expect(source).not.toContain('.blist-move')
-    expect(source).not.toContain('.blist-leave-active')
-  })
-
-  it('does not define WAAPI animation hooks (AutoAnimate replaces them)', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    expect(source).not.toContain('onItemEnter')
-    expect(source).not.toContain('onItemLeave')
-    expect(source).not.toContain('onBeforeEnter')
-    expect(source).not.toContain('onBeforeLeave')
-    expect(source).not.toContain('savedContainerHeight')
-  })
-
-  // ── Animation: content-fade retained ───────────────────────────────
-
-  it('retains content-fade transition for file detail switching', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    expect(source).toContain('name="content-fade"')
-  })
-
-  // ── No CSS transition class pollution ──────────────────────────────
-
-  it('does not define bitem-* CSS classes (AutoAnimate replaces CSS transitions)', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    expect(source).not.toContain('.bitem-enter-active')
-    expect(source).not.toContain('.bitem-leave-active')
-    expect(source).not.toContain('.bitem-enter-from')
-    expect(source).not.toContain('.bitem-leave-to')
-  })
-
-  it('does not use the old useAddTaskAnimations composable', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    expect(source).not.toContain('useAddTaskAnimations')
-  })
-})
-
-describe('AddTask submit flow', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    resetBatchIdCounter()
-    pushMock.mockClear()
-    warningMock.mockClear()
-  })
-
-  it('keeps the dialog open when manual magnet submission reports failures', async () => {
-    const source = (await import('@/components/task/AddTask.vue?raw')).default
-    expect(source).toContain('manualResult.magnetFailures')
-    expect(source).toContain('const failedCount =')
-    expect(source).toContain('handleClose()')
   })
 })

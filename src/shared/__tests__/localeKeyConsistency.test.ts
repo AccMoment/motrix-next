@@ -1,8 +1,8 @@
 /**
  * @fileoverview Locale key consistency tests.
  *
- * Validates that all 26 locale directories contain the same set of
- * translation keys in their preferences.js files. Uses en-US as the
+ * Validates that all 27 locale directories contain the same set of
+ * translation keys in their preferences.js and task.js files. Uses en-US as the
  * canonical reference. Detects missing keys (incomplete translations)
  * and extra keys (typos or stale translations).
  */
@@ -41,6 +41,7 @@ const EXPECTED_LOCALES = [
   'fa',
   'fr',
   'hu',
+  'hi',
   'id',
   'it',
   'ja',
@@ -62,7 +63,7 @@ const EXPECTED_LOCALES = [
 const enUsKeys = extractKeys(join(LOCALES_DIR, 'en-US', 'preferences.js'))
 
 describe('locale key consistency (preferences.js)', () => {
-  it('contains all 26 expected locale directories', () => {
+  it('contains all 27 expected locale directories', () => {
     for (const locale of EXPECTED_LOCALES) {
       expect(allLocales, `Missing locale directory: ${locale}`).toContain(locale)
     }
@@ -77,6 +78,22 @@ describe('locale key consistency (preferences.js)', () => {
   it.each(EXPECTED_LOCALES.filter((l) => l !== 'en-US'))('locale "%s" has no extra keys vs en-US', (locale) => {
     const localeKeys = extractKeys(join(LOCALES_DIR, locale, 'preferences.js'))
     const extra = localeKeys.filter((k) => !enUsKeys.includes(k))
+    expect(extra, `${locale} has extra keys: ${extra.join(', ')}`).toEqual([])
+  })
+})
+
+const enUsTaskKeys = extractKeys(join(LOCALES_DIR, 'en-US', 'task.js'))
+
+describe('locale key consistency (task.js)', () => {
+  it.each(EXPECTED_LOCALES.filter((l) => l !== 'en-US'))('locale "%s" has no missing keys vs en-US', (locale) => {
+    const localeKeys = extractKeys(join(LOCALES_DIR, locale, 'task.js'))
+    const missing = enUsTaskKeys.filter((k) => !localeKeys.includes(k))
+    expect(missing, `${locale} is missing keys: ${missing.join(', ')}`).toEqual([])
+  })
+
+  it.each(EXPECTED_LOCALES.filter((l) => l !== 'en-US'))('locale "%s" has no extra keys vs en-US', (locale) => {
+    const localeKeys = extractKeys(join(LOCALES_DIR, locale, 'task.js'))
+    const extra = localeKeys.filter((k) => !enUsTaskKeys.includes(k))
     expect(extra, `${locale} has extra keys: ${extra.join(', ')}`).toEqual([])
   })
 })

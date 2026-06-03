@@ -19,9 +19,24 @@ const { mockInvoke } = vi.hoisted(() => ({
   mockInvoke: vi.fn().mockResolvedValue({}),
 }))
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}))
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }))
+
+vi.mock('@shared/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/logger')>()
+  return {
+    ...actual,
+    logger: loggerMock,
+  }
+})
 
 import {
   isEngineReady,
@@ -153,6 +168,30 @@ describe('aria2 API (invoke transport)', () => {
       expect(result[0].path).toBe('/downloads/movie.mkv')
       expect(result[0].completedLength).toBe('0')
     })
+  })
+
+  it('logs addUri option diagnostics without leaking header values or query tokens', async () => {
+    mockInvoke.mockResolvedValueOnce('gid1')
+
+    await addUri({
+      uris: ['https://example.com/file.zip?token=secret'],
+      outs: [''],
+      options: {
+        dir: '/downloads',
+        split: '16',
+        'user-agent': 'BrowserUA/1.0',
+        referer: 'https://example.com/page?token=secret',
+        header: ['Accept: application/octet-stream', 'Cookie: session=secret'],
+      },
+    })
+
+    const logs = loggerMock.info.mock.calls.flat().join(' ')
+    expect(logs).toContain('headerNames=Accept,Cookie')
+    expect(logs).toContain('hasCookieHeader=true')
+    expect(logs).not.toContain('session=secret')
+    expect(logs).not.toContain('token=secret')
+    expect(logs).not.toContain('BrowserUA')
+    expect(logs).not.toContain('/downloads')
   })
 
   // ── Task Fetching ───────────────────────────────────────────────
@@ -393,7 +432,7 @@ describe('aria2 API (invoke transport)', () => {
       expect(result).toBe('gid-torrent')
       expect(mockInvoke).toHaveBeenCalledWith('aria2_add_torrent', {
         torrent: 'base64data',
-        options: {},
+        options: { 'force-save': 'true', 'check-integrity': 'true' },
       })
     })
 
@@ -402,9 +441,17 @@ describe('aria2 API (invoke transport)', () => {
       await addTorrent({ torrent: 'data', options: { dir: '/custom', split: '4' } })
       const callArgs = mockInvoke.mock.calls[0][1] as Record<string, unknown>
       const options = callArgs.options as Record<string, string>
-      expect(options['force-save']).toBeUndefined()
+      expect(options['force-save']).toBe('true')
+      expect(options['check-integrity']).toBe('true')
       expect(options.dir).toBe('/custom')
       expect(options.split).toBe('4')
+    })
+
+    it('addTorrent keeps explicit caller force-save value', async () => {
+      mockInvoke.mockResolvedValueOnce('gid-torrent')
+      await addTorrent({ torrent: 'data', options: { 'force-save': 'false' } })
+      const callArgs = mockInvoke.mock.calls[0][1] as Record<string, unknown>
+      expect((callArgs.options as Record<string, string>)['force-save']).toBe('false')
     })
 
     it('addUri does NOT inject force-save (HTTP downloads must not persist)', async () => {

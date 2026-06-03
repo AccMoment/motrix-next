@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   createBatchItem,
+  detectExternalInputKind,
   detectKind,
   extractMagnetDisplayName,
   mergeUriLines,
@@ -168,8 +169,7 @@ describe('mergeRawUriLines', () => {
 })
 
 // ── detectKind ────────────────────────────────────────────────────────
-// Follows aria2's ProtocolDetector classification order:
-// scheme-first → URL pathname → local path suffix → fallback.
+// Scheme-first → remote URI download → local path suffix → fallback.
 
 describe('detectKind', () => {
   // ── 1. Scheme-first: magnet / thunder ──────────────────────────────
@@ -195,12 +195,12 @@ describe('detectKind', () => {
 
   // ── 2. Remote URLs: pathname-only extension match ──────────────────
 
-  it('classifies remote .torrent URLs as torrent', () => {
-    expect(detectKind('https://example.com/files/download.torrent')).toBe('torrent')
+  it('classifies remote .torrent URLs as uri for manual downloads', () => {
+    expect(detectKind('https://example.com/files/download.torrent')).toBe('uri')
   })
 
-  it('classifies remote .torrent URLs with query params as torrent', () => {
-    expect(detectKind('https://example.com/file.torrent?token=abc&v=2')).toBe('torrent')
+  it('classifies remote .torrent URLs with query params as uri for manual downloads', () => {
+    expect(detectKind('https://example.com/file.torrent?token=abc&v=2')).toBe('uri')
   })
 
   it('classifies remote URLs with .torrent in hostname but not pathname as uri', () => {
@@ -215,14 +215,19 @@ describe('detectKind', () => {
     expect(detectKind('https://example.com/file.zip')).toBe('uri')
   })
 
-  it('classifies FTP URLs with .torrent as torrent', () => {
-    expect(detectKind('ftp://mirror.example.com/pub/file.torrent')).toBe('torrent')
+  it('classifies FTP URLs with .torrent as uri', () => {
+    expect(detectKind('ftp://mirror.example.com/pub/file.torrent')).toBe('uri')
   })
 
   // ── 3. Local file paths ───────────────────────────────────────────
 
   it('classifies local .torrent paths as torrent', () => {
     expect(detectKind('/Users/me/Downloads/ubuntu.torrent')).toBe('torrent')
+  })
+
+  it('classifies external remote .torrent URLs as torrent', () => {
+    expect(detectExternalInputKind('https://example.com/files/download.torrent')).toBe('torrent')
+    expect(detectExternalInputKind('https://example.com/file.torrent?token=abc&v=2')).toBe('torrent')
   })
 
   // ── 4. Fallback ───────────────────────────────────────────────────

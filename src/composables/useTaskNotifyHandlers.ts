@@ -19,6 +19,7 @@ import type { VNodeChild } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import type { Aria2Task } from '@shared/types'
 import { getTaskDisplayName } from '@shared/utils'
+import type { TaskSharingKind } from '@shared/utils/task'
 import { logger } from '@shared/logger'
 import { isMetadataTask } from '@/composables/useTaskLifecycle'
 import { renderCompletionToast } from '@/composables/useNotificationToast'
@@ -26,6 +27,7 @@ import { renderCompletionToast } from '@/composables/useNotificationToast'
 /** Dependency interface for testability. */
 export interface NotifyDeps {
   messageSuccess: (content: string | (() => VNodeChild)) => void
+  messageError: (content: string) => void
   t: (key: string, params?: Record<string, unknown>) => string
   /** Optional: open the downloaded file with the default application. */
   onOpenFile?: (task: Aria2Task) => void
@@ -57,15 +59,16 @@ export function handleTaskComplete(task: Aria2Task, deps: NotifyDeps): void {
 }
 
 /**
- * Handle a BT download entering seeding state (download phase complete).
+ * Handle a P2P download entering shared-upload state.
  * Always sends in-app toast. Native OS notification is sent by Rust monitor.
  *
  * When action callbacks are provided, the toast includes inline buttons
  * for "Open File" and "Show in Folder".
  */
-export function handleBtComplete(task: Aria2Task, deps: NotifyDeps): void {
+export function handleSharingComplete(task: Aria2Task, kind: TaskSharingKind, deps: NotifyDeps): void {
   const taskName = getTaskDisplayName(task)
-  const body = deps.t('task.bt-download-complete-message', { taskName })
+  const bodyKey = kind === 'bt' ? 'task.bt-download-complete-message' : 'task.ed2k-download-complete-message'
+  const body = deps.t(bodyKey, { taskName })
 
   const toastContent = renderCompletionToast({
     body,
@@ -74,15 +77,18 @@ export function handleBtComplete(task: Aria2Task, deps: NotifyDeps): void {
     onShowInFolder: deps.onShowInFolder ? () => deps.onShowInFolder!(task) : undefined,
   })
   deps.messageSuccess(toastContent)
-  logger.info('TaskNotify.btComplete', `gid=${task.gid} name="${taskName}" → seeding`)
+  logger.info('TaskNotify.sharingComplete', `gid=${task.gid} kind=${kind} name="${taskName}"`)
 }
 
 /**
- * Handle a download error. The in-app error toast is already handled by the
- * caller in MainLayout, and native OS notification is sent by Rust monitor.
+ * Handle a download error.
+ * Always sends in-app toast. Native OS notification is sent by Rust monitor.
  */
-export function handleTaskError(_task: Aria2Task, errorText: string): void {
-  logger.warn('TaskNotify.error', `gid=${_task.gid} error="${errorText}"`)
+export function handleTaskError(task: Aria2Task, reason: string, deps: NotifyDeps): void {
+  const taskName = getTaskDisplayName(task, { defaultName: 'Unknown' })
+  const body = deps.t('task.download-fail-message', { taskName, reason })
+  deps.messageError(body)
+  logger.warn('TaskNotify.error', `gid=${task.gid} error="${body}"`)
 }
 
 // ── Download-start notification ─────────────────────────────────────
@@ -96,8 +102,8 @@ export interface StartNotifyDeps {
 /**
  * Handle download submission success — send start notification.
  *
- * For single tasks:  "Started downloading movie.mp4"
- * For batch tasks:   "Started downloading movie.mp4 and 2 other task(s)"
+ * For single tasks:  "Downloading: movie.mp4"
+ * For batch tasks:   "Downloading: movie.mp4 and 2 other task(s)"
  *
  * Toast always fires; OS notification is delegated to Rust so lightweight mode
  * uses the same backend-owned native path as completion/error notifications.

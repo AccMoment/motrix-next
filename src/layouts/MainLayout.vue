@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** @fileoverview Main application layout with sidebar, subnav, and IPC event handling. */
-import { computed, h, ref, nextTick, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, ref, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -11,15 +11,16 @@ import { logger } from '@shared/logger'
 import { createTaskLifecycleService } from '@/composables/useTaskLifecycleService'
 import {
   buildHistoryRecord,
-  buildBtCompletionRecord,
+  buildSharingCompletionRecord,
   isMetadataTask,
   updateHistoryFilePath,
 } from '@/composables/useTaskLifecycle'
 import { setArchivedPath, resolveTaskFilePath, requestFileRecheck } from '@/composables/useArchivedPaths'
-import { handleTaskComplete, handleBtComplete, handleTaskError } from '@/composables/useTaskNotifyHandlers'
-import { shouldDeleteTorrent, trashTorrentFile, cleanupTorrentMetadataFiles } from '@/composables/useDownloadCleanup'
-import { cleanupAria2ControlFile } from '@/composables/useFileDelete'
-import { getTaskDisplayName, resolveOpenTarget, checkTaskIsSeeder } from '@shared/utils'
+import { handleTaskComplete, handleSharingComplete, handleTaskError } from '@/composables/useTaskNotifyHandlers'
+import { shouldDeleteTorrent, trashTorrentFile } from '@/composables/useDownloadCleanup'
+import { cleanupAria2ControlFiles } from '@/composables/useFileDelete'
+import { getTaskDisplayName, resolveOpenTarget, checkTaskIsSharing } from '@shared/utils'
+import type { TaskSharingKind } from '@shared/utils/task'
 import type { Aria2Task } from '@shared/types'
 import { ARIA2_ERROR_CODES } from '@shared/aria2ErrorCodes'
 import { TASK_STATUS } from '@shared/constants'
@@ -28,6 +29,8 @@ import {
   parseFilesForSelection,
   buildSelectFileOption,
   buildStatusAwareConfirmAction,
+  getPendingMagnetSelectionGids,
+  getResolvedMagnetSelection,
 } from '@/composables/useMagnetFlow'
 import type { MagnetFileItem } from '@/composables/useMagnetFlow'
 import aria2Api from '@/api/aria2'
@@ -59,7 +62,6 @@ interface MagnetSelectionSession {
 
 const { t } = useI18n()
 const route = useRoute()
-const router = useRouter()
 const appStore = useAppStore()
 const taskStore = useTaskStore()
 const preferenceStore = usePreferenceStore()
@@ -97,6 +99,7 @@ let unlistenStat: (() => void) | null = null
 let lifecycleService: ReturnType<typeof createTaskLifecycleService> | null = null
 let magnetPollTimer: ReturnType<typeof setTimeout> | null = null
 let unlistenFocusRecheck: (() => void) | null = null
+let unlistenAppToast: (() => void) | null = null
 
 // ── Notification action helpers (reuse existing IPC commands) ────────
 
@@ -190,6 +193,26 @@ const { setupListeners } = useAppEvents({
   },
 })
 
+function startAppToastListener() {
+  stopAppToastListener()
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<{ type?: string; key?: string }>).detail
+    if (!detail?.key) return
+    const text = t(detail.key)
+    if (detail.type === 'error') message.error(text)
+    else if (detail.type === 'warning') message.warning(text)
+    else if (detail.type === 'info') message.info(text)
+    else message.success(text)
+  }
+  window.addEventListener('app:toast', handler)
+  unlistenAppToast = () => window.removeEventListener('app:toast', handler)
+}
+
+function stopAppToastListener() {
+  unlistenAppToast?.()
+  unlistenAppToast = null
+}
+
 // ── Config migration toast ──────────────────────────────────────────
 watch(
   () => preferenceStore.migrationResult,
@@ -230,37 +253,6 @@ watch(
   { immediate: true },
 )
 
-// ── Protocol association confirmation dialog ────────────────────────
-// syncProtocolHandlers() in main.ts detects unregistered protocols at
-// startup and posts them to appStore.pendingProtocolHijack.  This watcher
-// picks them up once the Naive UI dialog provider is active.
-watch(
-  () => appStore.pendingProtocolHijack,
-  (hijacked) => {
-    if (!hijacked || hijacked.length === 0) return
-    const protocolList = hijacked.join(', ')
-    const rawContent = t('app.protocol-hijacked-dialog-content', { protocols: protocolList })
-    navDialog.warning({
-      title: t('app.protocol-hijacked-title'),
-      content: () =>
-        rawContent.split('\n').reduce<(string | ReturnType<typeof h>)[]>((acc, line, i) => {
-          if (i > 0) acc.push(h('br'))
-          if (line) acc.push(line)
-          return acc
-        }, []),
-      positiveText: t('preferences.open-settings'),
-      negativeText: t('app.dismiss'),
-      onPositiveClick: () => {
-        if (route.path !== '/preference/advanced') {
-          router.push('/preference/advanced')
-        }
-      },
-    })
-    appStore.pendingProtocolHijack = []
-  },
-  { deep: true, immediate: true },
-)
-
 // ── Stat listener — passive subscription to Rust stat_service events ──
 // Replaces the old frontend polling loop. Rust is the sole poller of aria2;
 // the frontend simply listens for `stat:update` and updates reactive state.
@@ -278,12 +270,10 @@ function stopStatListener() {
 // ── Magnet metadata monitoring (app-level) ──────────────────────────
 
 /**
- * Poll pending magnet tasks for metadata completion.
+ * Poll pending magnet metadata tasks for native aria2 follow-up downloads.
  *
- * aria2 creates a NEW GID (via followedBy) for the actual download after
- * magnet metadata resolves. With pause-metadata=true, this follow-up task
- * starts paused. We poll the metadata GID for followedBy, then call getFiles
- * on the follow-up GID to show the file selection dialog.
+ * With pause-metadata=true, aria2 resolves metadata on one GID and creates a
+ * paused content task exposed through followedBy.
  *
  * When multiple magnets are added concurrently, only one dialog is shown at
  * a time. The poll pauses while a dialog is open and resumes after the user
@@ -309,21 +299,20 @@ function startMagnetPoll() {
 
     for (const gid of [...gids]) {
       try {
-        const task = await taskStore.fetchTaskStatus(gid)
+        const metadataTask = await taskStore.fetchTaskStatus(gid)
+        const resolved = getResolvedMagnetSelection(metadataTask)
+        if (!resolved) continue
 
-        // Use followedBy GID if available (magnet follow-up), else same GID
-        const targetGid = task.followedBy?.[0] ?? gid
-
-        const files = await taskStore.getFiles(targetGid)
-        // Filter real content files (length > 0) and skip [METADATA] entries
-        const realFiles = files.filter((f) => Number(f.length) > 0 && !f.path.startsWith('[METADATA]'))
+        const task = await taskStore.fetchTaskStatus(resolved.downloadGid)
+        const files = await taskStore.getFiles(resolved.downloadGid)
+        const realFiles = files.filter((f) => Number(f.length) > 0)
         if (realFiles.length === 0) continue
 
         // Metadata resolved — show file selection dialog
         appStore.pendingMagnetGids = appStore.pendingMagnetGids.filter((g) => g !== gid)
         const parsed = parseFilesForSelection(realFiles)
         magnetSelectFiles.value = parsed
-        magnetSelectionSession.value = { metadataGid: gid, downloadGid: targetGid }
+        magnetSelectionSession.value = resolved
         magnetSelectName.value = task.bittorrent?.info?.name || parsed[0]?.name || t('task.magnet-task')
         magnetSelectVisible.value = true
         return // Process one magnet at a time
@@ -336,6 +325,19 @@ function startMagnetPoll() {
   }
 
   void tick()
+}
+
+async function restorePendingMagnetSelections() {
+  try {
+    const tasks = await aria2Api.fetchTaskList({ type: 'active' })
+    const gids = getPendingMagnetSelectionGids(tasks)
+    if (gids.length === 0) return
+
+    const known = new Set(appStore.pendingMagnetGids)
+    appStore.pendingMagnetGids = [...appStore.pendingMagnetGids, ...gids.filter((gid) => !known.has(gid))]
+  } catch (e) {
+    logger.debug('MainLayout.magnetRestore', e instanceof Error ? e.message : String(e))
+  }
 }
 
 async function handleMagnetConfirm(selectedIndices: number[]) {
@@ -545,7 +547,7 @@ function skipShutdownOnce() {
 /**
  * Event-driven shutdown condition check.
  *
- * Called from lifecycle callbacks (onTaskComplete / onBtComplete) instead
+ * Called from lifecycle callbacks (onTaskComplete / onSharingComplete) instead
  * of a stat watcher. Queries aria2 directly for real-time task state,
  * bypassing the stale taskStore.taskList and the unreliable
  * appStore.stat.numActive (which counts seeders as active).
@@ -556,8 +558,8 @@ async function checkShutdownCondition() {
 
   try {
     const activeTasks = await aria2Api.fetchTaskList({ type: 'active' })
-    const activeNonSeeders = activeTasks.filter((t) => !checkTaskIsSeeder(t))
-    if (activeNonSeeders.length > 0) return
+    const activeDownloads = activeTasks.filter((t) => !checkTaskIsSharing(t))
+    if (activeDownloads.length > 0) return
 
     const waitingTasks = await aria2Api.fetchTaskList({ type: 'waiting' })
     if (waitingTasks.length > 0) return
@@ -569,6 +571,7 @@ async function checkShutdownCondition() {
 }
 
 onMounted(async () => {
+  startAppToastListener()
   // Platform is initialised by usePlatform() singleton — no per-component call needed.
 
   // Show the main window now that the frontend has mounted and the
@@ -595,25 +598,21 @@ onMounted(async () => {
   {
     const { invoke } = await import('@tauri-apps/api/core')
     const isAutostart: boolean = await invoke('is_autostart_launch')
-    const silentExternalInput = await invoke<boolean>('peek_pending_deep_links_silent')
-    // Read autoHideWindow directly from the Tauri persistent store
-    // instead of the Pinia reactive state.  The Pinia store initialises
-    // with DEFAULT_APP_CONFIG (autoHideWindow: false) and is hydrated
-    // asynchronously by loadPreference() in main.ts.  Because
-    // loadPreference() uses a non-blocking .then(), Vue components can
-    // mount before hydration completes, causing this code to read the
-    // stale default value and incorrectly call show() — undoing the
-    // Rust-layer force-hide.  Reading via Tauri Store IPC matches
-    // exactly what the Rust setup() guard does, guaranteeing both
-    // layers see the same persisted value.
+    const silentPendingDeepLinks = await invoke<boolean>('peek_pending_deep_links_silent')
+    const silentPendingExternalInputs = await invoke<boolean>('peek_pending_external_inputs_silent')
+    // Read autoHideWindow directly from the same Tauri persistent store
+    // used by the Rust setup() guard. This keeps the frontend safety net
+    // aligned with the native cold-start decision, including WebView
+    // recreation in lightweight mode.
     const { load } = await import('@tauri-apps/plugin-store')
     const tauriStore = await load('config.json')
     const prefs = await tauriStore.get<Record<string, unknown>>('preferences')
     const autoHide = !!(prefs?.autoHideWindow ?? false)
+    const silentExternalInput = silentPendingDeepLinks || silentPendingExternalInputs
     const shouldHide = (isAutostart && autoHide) || silentExternalInput
     logger.info(
       'MainLayout.windowVisibility',
-      `autostart=${isAutostart} autoHide=${autoHide} silentExternalInput=${silentExternalInput} -> shouldHide=${shouldHide}`,
+      `autostart=${isAutostart} autoHide=${autoHide} silentDeepLinks=${silentPendingDeepLinks} silentExternalInputs=${silentPendingExternalInputs} -> shouldHide=${shouldHide}`,
     )
     if (!shouldHide) {
       const appWindow = getCurrentWindow()
@@ -668,10 +667,12 @@ onMounted(async () => {
       const record = buildHistoryRecord(task)
       historyStore.addRecord(record).catch((e) => logger.debug('Lifecycle.historyRecord.error', e))
       const i18nKey = task.errorCode ? ARIA2_ERROR_CODES[task.errorCode] : undefined
-      const taskName = getTaskDisplayName(task, { defaultName: 'Unknown' })
       const errorText = i18nKey ? t(i18nKey) : task.errorMessage || t('task.error-unknown')
-      message.error(`${taskName}: ${errorText}`)
-      handleTaskError(task, `${taskName}: ${errorText}`)
+      handleTaskError(task, errorText, {
+        messageSuccess: message.success,
+        messageError: message.error,
+        t,
+      })
     },
     onTaskComplete: async (task) => {
       if (isMetadataTask(task)) return
@@ -684,6 +685,7 @@ onMounted(async () => {
       historyStore.addRecord(record).catch((e) => logger.debug('Lifecycle.historyRecord', e))
       handleTaskComplete(task, {
         messageSuccess: message.success,
+        messageError: message.error,
         t,
         onOpenFile: openFileFromNotification,
         onShowInFolder: showInFolderFromNotification,
@@ -726,47 +728,39 @@ onMounted(async () => {
         logger.debug('AutoArchive.result', `gid=${task.gid} action=none`)
       }
 
-      // Clean up .aria2 control file for BT tasks that auto-completed seeding
-      // (seed-ratio or seed-time threshold reached). Best-effort, never throws.
-      if (task.bittorrent) {
-        cleanupAria2ControlFile(task).catch((e) => logger.debug('Lifecycle.aria2ControlCleanup', e))
-        // Also clean hex40 .torrent metadata. Covers session-restore case
-        // where onBtComplete was suppressed by initialScanDone — the metadata
-        // wasn't deleted at download-complete time, so we catch it here.
-        if (task.dir && task.infoHash) {
-          cleanupTorrentMetadataFiles(task.dir, task.infoHash).catch((e) =>
-            logger.debug('Lifecycle.metadataCleanup.complete', e),
-          )
-        }
+      // Clean up stale .aria2 control files when P2P sharing auto-stops.
+      if (task.bittorrent || task.ed2k) {
+        cleanupAria2ControlFiles(task).catch((e) => logger.debug('Lifecycle.aria2ControlCleanup', e))
       }
 
       // ── Auto-shutdown: check after task completion ──
       checkShutdownCondition()
     },
-    onBtComplete: async (task) => {
-      // Persist immediately — download is complete, seeding is just uploading.
+    onSharingComplete: async (task, kind: TaskSharingKind) => {
+      // Persist immediately — download is complete, sharing is just uploading.
       // INSERT OR REPLACE: safe if onTaskComplete later writes the same GID.
       if (!isMetadataTask(task)) {
-        // Clean up stale DB records from previous sessions (different GID, same infoHash)
-        if (task.infoHash) {
+        if (kind === 'bt' && task.infoHash) {
           historyStore
             .removeByInfoHash(task.infoHash, task.gid)
-            .catch((e) => logger.debug('Lifecycle.btComplete.cleanStale', e))
+            .catch((e) => logger.debug('Lifecycle.sharingComplete.cleanStale', e))
         }
-        const record = buildBtCompletionRecord(task)
-        historyStore.addRecord(record).catch((e) => logger.debug('Lifecycle.btComplete.history', e))
+        const record = buildSharingCompletionRecord(task)
+        historyStore.addRecord(record).catch((e) => logger.debug('Lifecycle.sharingComplete.history', e))
       }
-      handleBtComplete(task, {
+      handleSharingComplete(task, kind, {
         messageSuccess: message.success,
+        messageError: message.error,
         t,
         onOpenFile: openFileFromNotification,
         onShowInFolder: showInFolderFromNotification,
       })
 
-      // ── Auto-shutdown: check after BT download completion ──
+      // ── Auto-shutdown: check after P2P download completion ──
       // Must be BEFORE shouldDeleteTorrent early return to avoid being skipped.
       checkShutdownCondition()
 
+      if (kind !== 'bt') return
       if (!shouldDeleteTorrent(preferenceStore.config)) return
       const sourcePath = task.infoHash ? taskStore.consumeTorrentSource(task.infoHash) : undefined
       if (sourcePath) {
@@ -775,9 +769,6 @@ onMounted(async () => {
           const taskName = getTaskDisplayName(task)
           message.success(t('task.torrent-trashed', { taskName }))
         }
-      }
-      if (task.dir && task.infoHash) {
-        cleanupTorrentMetadataFiles(task.dir, task.infoHash).catch((e) => logger.debug('Lifecycle.metadataCleanup', e))
       }
     },
   })
@@ -795,6 +786,7 @@ onMounted(async () => {
   // Watches pendingMagnetGids in app store and starts polling when
   // magnet tasks are added. Runs at MainLayout level so it works
   // even when the user navigates away from the task page.
+  await restorePendingMagnetSelections()
   watch(
     () => appStore.pendingMagnetGids,
     (gids) => {
@@ -922,6 +914,7 @@ onUnmounted(() => {
   if (unlistenResize) unlistenResize()
   if (unlistenExitDialog) unlistenExitDialog()
   if (unlistenPowerCountdown) unlistenPowerCountdown()
+  stopAppToastListener()
   dismissCountdown()
   cancelPendingResize()
 })

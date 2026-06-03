@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::services::{deep_link, frontend_action, http_api};
+use crate::services::{deep_link, external_input, frontend_action, http_api};
 
 /// Restart the embedded HTTP API server on a new port.
 ///
@@ -27,10 +27,24 @@ pub fn take_pending_deep_links(
 }
 
 #[tauri::command]
+pub fn take_pending_external_inputs(
+    state: tauri::State<'_, external_input::PendingExternalInputState>,
+) -> external_input::PendingExternalInputsPayload {
+    external_input::take_pending_external_inputs(state.inner())
+}
+
+#[tauri::command]
 pub fn peek_pending_deep_links_silent(
     state: tauri::State<'_, deep_link::PendingDeepLinkState>,
 ) -> bool {
     deep_link::peek_pending_deep_links_silent(state.inner())
+}
+
+#[tauri::command]
+pub fn peek_pending_external_inputs_silent(
+    state: tauri::State<'_, external_input::PendingExternalInputState>,
+) -> bool {
+    external_input::peek_pending_external_inputs_silent(state.inner())
 }
 
 /// Drain and return all pending frontend UI actions.

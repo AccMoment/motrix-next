@@ -20,12 +20,14 @@ import {
 import type { AppConfig } from '@shared/types'
 
 const baseForm: Ed2kForm = {
-  ed2kListenPort: 4662,
+  ed2kListenPort: 29140,
+  ed2kUdpListenPort: 29150,
   ed2kServer: '',
-  ed2kServerList: '',
-  ed2kNodeList: '',
+  ed2kServerMetUrl: 'https://upd.emule-security.org/server.met',
+  ed2kNodesDatUrl: 'https://upd.emule-security.org/nodes.dat',
+  ed2kBootstrapAutoSync: true,
+  ed2kBootstrapSyncIntervalHours: 24,
   ed2kUploadSlots: 3,
-  ed2kShareFiles: '',
   ed2kSearchTimeout: 20,
 }
 
@@ -33,23 +35,23 @@ describe('buildEd2kForm', () => {
   it('defaults to Aria2 Next ED2K values', () => {
     const form = buildEd2kForm({} as AppConfig)
 
-    expect(form.ed2kListenPort).toBe(4662)
+    expect(form.ed2kListenPort).toBe(29140)
+    expect(form.ed2kUdpListenPort).toBe(29150)
     expect(form.ed2kServer).toBe('')
-    expect(form.ed2kServerList).toBe('')
-    expect(form.ed2kNodeList).toBe('')
+    expect(form.ed2kServerMetUrl).toBe('https://upd.emule-security.org/server.met')
+    expect(form.ed2kNodesDatUrl).toBe('https://upd.emule-security.org/nodes.dat')
+    expect(form.ed2kBootstrapAutoSync).toBe(true)
+    expect(form.ed2kBootstrapSyncIntervalHours).toBe(24)
     expect(form.ed2kUploadSlots).toBe(3)
-    expect(form.ed2kShareFiles).toBe('')
     expect(form.ed2kSearchTimeout).toBe(20)
   })
 
-  it('renders persisted server and shared file lists as one item per line', () => {
+  it('renders persisted server list as one item per line', () => {
     const form = buildEd2kForm({
       ed2kServer: 'server-one.example:4661,server-two.example:4661',
-      ed2kShareFiles: ['/downloads/a.bin', '/downloads/b.bin'],
     } as AppConfig)
 
     expect(form.ed2kServer).toBe('server-one.example:4661\nserver-two.example:4661')
-    expect(form.ed2kShareFiles).toBe('/downloads/a.bin\n/downloads/b.bin')
   })
 })
 
@@ -58,18 +60,13 @@ describe('buildEd2kSystemConfig', () => {
     const config = buildEd2kSystemConfig({
       ...baseForm,
       ed2kServer: 'server-one.example:4661\nserver-two.example:4661',
-      ed2kServerList: '/lists/server.met',
-      ed2kNodeList: '/lists/nodes.dat',
-      ed2kShareFiles: '/downloads/a.bin\n/downloads/b.bin',
     })
 
     expect(config).toEqual({
-      'ed2k-listen-port': '4662',
+      'ed2k-listen-port': '29140',
+      'ed2k-udp-listen-port': '29150',
       'ed2k-server': 'server-one.example:4661,server-two.example:4661',
-      'ed2k-server-list': '/lists/server.met',
-      'ed2k-node-list': '/lists/nodes.dat',
       'ed2k-upload-slots': '3',
-      'ed2k-share-file': '/downloads/a.bin\n/downloads/b.bin',
     })
   })
 })
@@ -79,19 +76,22 @@ describe('transformEd2kForStore', () => {
     const result = transformEd2kForStore({
       ...baseForm,
       ed2kServer: ' server-one.example:4661 \n\nserver-two.example:4661 ',
-      ed2kServerList: ' /lists/server.met ',
-      ed2kNodeList: ' /lists/nodes.dat ',
-      ed2kShareFiles: ' /downloads/a.bin \n /downloads/b.bin ',
+      ed2kServerMetUrl: ' https://example.test/server.met ',
+      ed2kNodesDatUrl: ' https://example.test/nodes.dat ',
+      ed2kBootstrapAutoSync: false,
+      ed2kBootstrapSyncIntervalHours: 168,
       ed2kSearchTimeout: 120,
     })
 
     expect(result).toEqual({
-      ed2kListenPort: 4662,
+      ed2kListenPort: 29140,
+      ed2kUdpListenPort: 29150,
       ed2kServer: 'server-one.example:4661,server-two.example:4661',
-      ed2kServerList: '/lists/server.met',
-      ed2kNodeList: '/lists/nodes.dat',
+      ed2kServerMetUrl: 'https://example.test/server.met',
+      ed2kNodesDatUrl: 'https://example.test/nodes.dat',
+      ed2kBootstrapAutoSync: false,
+      ed2kBootstrapSyncIntervalHours: 168,
       ed2kUploadSlots: 3,
-      ed2kShareFiles: ['/downloads/a.bin', '/downloads/b.bin'],
       ed2kSearchTimeout: 120,
     })
   })
@@ -100,11 +100,14 @@ describe('transformEd2kForStore', () => {
 describe('validateEd2kForm', () => {
   it('accepts port 0 so Aria2 Next can ask the OS for an available port', () => {
     expect(validateEd2kForm({ ...baseForm, ed2kListenPort: 0 })).toBeNull()
+    expect(validateEd2kForm({ ...baseForm, ed2kUdpListenPort: 0 })).toBeNull()
   })
 
   it('rejects invalid listen ports', () => {
     expect(validateEd2kForm({ ...baseForm, ed2kListenPort: -1 })).toBe('preferences.ed2k-invalid-listen-port')
     expect(validateEd2kForm({ ...baseForm, ed2kListenPort: 65536 })).toBe('preferences.ed2k-invalid-listen-port')
+    expect(validateEd2kForm({ ...baseForm, ed2kUdpListenPort: -1 })).toBe('preferences.ed2k-invalid-listen-port')
+    expect(validateEd2kForm({ ...baseForm, ed2kUdpListenPort: 65536 })).toBe('preferences.ed2k-invalid-listen-port')
   })
 
   it('rejects invalid upload slot counts', () => {
@@ -119,6 +122,15 @@ describe('validateEd2kForm', () => {
   it('rejects malformed ED2K server endpoints', () => {
     expect(validateEd2kForm({ ...baseForm, ed2kServer: 'server.example:not-a-port' })).toBe(
       'preferences.ed2k-invalid-server',
+    )
+  })
+
+  it('rejects invalid bootstrap URLs', () => {
+    expect(validateEd2kForm({ ...baseForm, ed2kServerMetUrl: 'ftp://example.test/server.met' })).toBe(
+      'preferences.ed2k-invalid-bootstrap-url',
+    )
+    expect(validateEd2kForm({ ...baseForm, ed2kNodesDatUrl: 'not-a-url' })).toBe(
+      'preferences.ed2k-invalid-bootstrap-url',
     )
   })
 })
@@ -140,8 +152,8 @@ describe('randomEd2kPort', () => {
   it('chooses ports from the ED2K auto-recovery range', () => {
     for (let i = 0; i < 100; i++) {
       const port = randomEd2kPort()
-      expect(port).toBeGreaterThanOrEqual(30000)
-      expect(port).toBeLessThanOrEqual(34999)
+      expect(port).toBeGreaterThanOrEqual(29000)
+      expect(port).toBeLessThanOrEqual(29999)
     }
   })
 })

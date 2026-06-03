@@ -19,6 +19,16 @@ import { defineComponent, nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 
+const mockMessage = vi.hoisted(() => {
+  const createMessageFn = () => vi.fn((_message?: unknown, _options?: unknown) => ({ destroy: vi.fn() }))
+  return {
+    success: createMessageFn(),
+    error: createMessageFn(),
+    warning: createMessageFn(),
+    info: createMessageFn(),
+  }
+})
+
 // ── Mock Tauri invoke ───────────────────────────────────────────────
 const mockInvoke = vi.fn().mockResolvedValue(undefined)
 vi.mock('@tauri-apps/api/core', () => ({
@@ -27,12 +37,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 // ── Mock naive-ui (useMessage needed by useAppMessage) ──────────────
 vi.mock('naive-ui', () => ({
-  useMessage: () => ({
-    success: vi.fn(() => ({ destroy: vi.fn() })),
-    error: vi.fn(() => ({ destroy: vi.fn() })),
-    warning: vi.fn(() => ({ destroy: vi.fn() })),
-    info: vi.fn(() => ({ destroy: vi.fn() })),
-  }),
+  useMessage: () => mockMessage,
 }))
 
 // ── Mock vue-i18n ───────────────────────────────────────────────────
@@ -51,6 +56,15 @@ vi.mock('@/api/aria2', () => ({
 import { usePreferenceStore } from '@/stores/preference'
 import { usePreferenceForm } from '../usePreferenceForm'
 
+function extractMessageText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'function') {
+    const vnode = value()
+    return typeof vnode === 'object' && vnode !== null && 'children' in vnode ? String(vnode.children) : String(value)
+  }
+  return String(value)
+}
+
 interface TestForm extends Record<string, unknown> {
   dir: string
   maxConcurrentDownloads: number
@@ -61,7 +75,7 @@ function makeOptions(overrides: Partial<Parameters<typeof usePreferenceForm<Test
   return {
     buildForm: () => ({
       dir: '/downloads',
-      maxConcurrentDownloads: 5,
+      maxConcurrentDownloads: 6,
       locale: 'en-US',
     }),
     buildSystemConfig: (f: TestForm) => ({
@@ -106,7 +120,7 @@ describe('usePreferenceForm', () => {
     const { form, isDirty } = result
 
     expect(form.value.dir).toBe('/downloads')
-    expect(form.value.maxConcurrentDownloads).toBe(5)
+    expect(form.value.maxConcurrentDownloads).toBe(6)
     expect(isDirty.value).toBe(false)
 
     unmount()
@@ -152,8 +166,28 @@ describe('usePreferenceForm', () => {
     await nextTick()
 
     expect(form.value.dir).toBe('/downloads')
-    expect(form.value.maxConcurrentDownloads).toBe(5)
+    expect(form.value.maxConcurrentDownloads).toBe(6)
     expect(isDirty.value).toBe(false)
+
+    unmount()
+  })
+
+  it('handleReset shows a restored toast only when changes existed', async () => {
+    const { result, unmount } = withSetup(() => usePreferenceForm(makeOptions()))
+    const { form, handleReset } = result
+
+    handleReset()
+    expect(mockMessage.success).not.toHaveBeenCalled()
+
+    form.value.dir = '/modified'
+    await nextTick()
+
+    handleReset()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(mockMessage.success).toHaveBeenCalledTimes(1)
+    const [message, options] = mockMessage.success.mock.calls[0]
+    expect(extractMessageText(message)).toBe('preferences.changes-restored')
+    expect(options).toEqual(expect.objectContaining({ closable: true }))
 
     unmount()
   })
@@ -212,6 +246,27 @@ describe('usePreferenceForm', () => {
     unmount()
   })
 
+  it('runs afterSave before showing the save-success toast', async () => {
+    const store = usePreferenceStore()
+    store.updateAndSave = vi.fn().mockResolvedValue(true)
+    const events: string[] = []
+    mockMessage.success.mockImplementation((message?: unknown) => {
+      events.push(`success:${extractMessageText(message)}`)
+      return { destroy: vi.fn() }
+    })
+
+    const afterSave = vi.fn(async () => {
+      events.push('afterSave')
+    })
+    const { result, unmount } = withSetup(() => usePreferenceForm(makeOptions({ afterSave })))
+
+    await result.handleSave()
+
+    expect(events).toEqual(['afterSave', 'success:preferences.save-success-message'])
+
+    unmount()
+  })
+
   it('patchSnapshot updates only specified fields in the baseline', async () => {
     const { result, unmount } = withSetup(() => usePreferenceForm(makeOptions()))
     const { form, isDirty, patchSnapshot, resetSnapshot } = result
@@ -261,7 +316,7 @@ describe('usePreferenceForm', () => {
 
     // Should call changeGlobalOption with filtered keys (no restart-only keys)
     expect(mockChangeGlobalOption).toHaveBeenCalledWith(
-      expect.objectContaining({ dir: '/downloads', 'max-concurrent-downloads': '5' }),
+      expect.objectContaining({ dir: '/downloads', 'max-concurrent-downloads': '6' }),
     )
 
     unmount()

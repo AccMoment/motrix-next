@@ -24,12 +24,9 @@ function genId(): string {
  *
  *   1. **Scheme-first** — magnet/thunder URIs are always 'uri' tasks
  *      (aria2: `guessTorrentMagnet` checks `magnet:?` prefix).
- *   2. **Remote URLs** — extract `pathname` via the WHATWG `URL` API and
- *      match the extension on the path only, isolating query-string
- *      tracker hostnames like `tracker.torrent.eu.org` that would
- *      otherwise false-positive on `.includes('.torrent')`.
- *   3. **Local paths** — match with `endsWith()` on the full string
- *      (file-chooser dialogs already filter by extension).
+ *   2. **Remote URLs** — remain URI downloads. Manual AddTask URL input
+ *      downloads the referenced file itself.
+ *   3. **Local paths** — `.torrent` files become torrent tasks.
  *   4. **Fallback** — everything else is a plain 'uri'.
  */
 export function detectKind(source: string): BatchItemKind {
@@ -40,24 +37,29 @@ export function detectKind(source: string): BatchItemKind {
     return 'uri'
   }
 
-  // ── 2. Remote URLs: isolate pathname from query params ────────────
-  // Prevents false positives from tracker hostnames in magnet URI
-  // query strings (e.g. `tracker.torrent.eu.org`).
-  if (/^(?:https?|ftp):\/\//i.test(lower)) {
-    try {
-      const pathname = new URL(source).pathname.toLowerCase()
-      if (pathname.endsWith('.torrent')) return 'torrent'
-    } catch {
-      // Malformed URL — fall through to 'uri'
-    }
-    return 'uri'
-  }
+  // ── 2. Remote URLs are ordinary downloads ────────────────────────
+  if (/^https?:\/\//i.test(lower)) return 'uri'
+
+  if (/^ftp:\/\//i.test(lower)) return 'uri'
 
   // ── 3. Local file paths: extension suffix match ───────────────────
   if (lower.endsWith('.torrent')) return 'torrent'
 
   // ── 4. Fallback ───────────────────────────────────────────────────
   return 'uri'
+}
+
+/** Classify external-capture inputs where remote .torrent means "add BT task". */
+export function detectExternalInputKind(source: string): BatchItemKind {
+  if (/^https?:\/\//i.test(source)) {
+    try {
+      const pathname = new URL(source).pathname.toLowerCase()
+      if (pathname.endsWith('.torrent')) return 'torrent'
+    } catch {
+      return 'uri'
+    }
+  }
+  return detectKind(source)
 }
 
 /**

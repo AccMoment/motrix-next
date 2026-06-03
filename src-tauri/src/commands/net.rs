@@ -1,8 +1,5 @@
 /// Network utility commands: remote file fetching and filename resolution.
 ///
-/// `fetch_remote_bytes` — Downloads raw bytes (e.g. `.torrent` files) for
-/// the browser extension deep-link flow.
-///
 /// `resolve_filename` — Resolves trustworthy filenames for extensionless HTTP
 /// URLs before forwarding them to aria2.
 ///
@@ -12,28 +9,14 @@
 /// neutral English fallback.
 use crate::error::AppError;
 
-/// Applies an optional proxy to a `reqwest::ClientBuilder`.
-///
-/// Mirrors the pattern in `tracker.rs::fetch_tracker_sources`: when the
-/// frontend passes `Some("http://...")`, all requests go through the proxy;
-/// `None` or empty string means direct connection.
-fn apply_optional_proxy(
-    builder: reqwest::ClientBuilder,
-    proxy: &Option<String>,
-) -> reqwest::ClientBuilder {
-    log::debug!("apply_optional_proxy: proxy={proxy:?}");
-    if let Some(ref server) = proxy {
-        if !server.is_empty() {
-            match reqwest::Proxy::all(server) {
-                Ok(p) => return builder.proxy(p),
-                Err(e) => log::warn!("apply_optional_proxy: invalid proxy '{server}': {e}"),
-            }
-        }
-    }
-    builder
-}
+const MAX_TORRENT_SIZE: usize = 16 * 1024 * 1024;
 
-const MAX_TORRENT_SIZE: usize = 16 * 1024 * 1024; // 16 MiB — generous for any .torrent
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRequestHeader {
+    pub name: String,
+    pub value: String,
+}
 
 /// Timeout for HEAD requests in `resolve_filename`.  Short enough to avoid
 /// blocking the UI, long enough for CDN edge nodes to respond.
@@ -70,9 +53,10 @@ pub async fn resolve_filename(
     let builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(HEAD_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::limited(5));
-    let client = apply_optional_proxy(builder, &proxy)
-        .build()
-        .map_err(|e| AppError::Io(format!("HEAD client init failed: {e}")))?;
+    let client =
+        crate::commands::http_client::apply_explicit_proxy(builder, &proxy, "resolve_filename")
+            .build()
+            .map_err(|e| AppError::Io(format!("HEAD client init failed: {e}")))?;
 
     let req =
         apply_download_request_headers(client.head(&url), referer.as_deref(), cookie.as_deref());
@@ -132,7 +116,8 @@ pub async fn resolve_filename(
     }
 
     log::debug!(
-        "resolve_filename: no trusted filename source for {url}; using {UNRESOLVED_FILENAME}"
+        "resolve_filename: no trusted filename source for {}; using {UNRESOLVED_FILENAME}",
+        summarize_url_for_log(&url)
     );
     Ok(Some(UNRESOLVED_FILENAME.to_string()))
 }
@@ -203,6 +188,86 @@ fn apply_download_request_headers(
         req = req.header(reqwest::header::COOKIE, cookie);
     }
     req
+}
+
+fn apply_remote_request_headers(
+    mut req: reqwest::RequestBuilder,
+    referer: Option<&str>,
+    cookie: Option<&str>,
+    user_agent: Option<&str>,
+    request_headers: &[RemoteRequestHeader],
+) -> reqwest::RequestBuilder {
+    for header in request_headers {
+        if let (Ok(name), Ok(value)) = (
+            reqwest::header::HeaderName::from_bytes(header.name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(&header.value),
+        ) {
+            req = req.header(name, value);
+        }
+    }
+    if let Some(user_agent) = user_agent.filter(|v| !v.trim().is_empty()) {
+        req = req.header(reqwest::header::USER_AGENT, user_agent);
+    }
+    apply_download_request_headers(req, referer, cookie)
+}
+
+#[tauri::command]
+pub async fn fetch_remote_bytes(
+    url: String,
+    proxy: Option<String>,
+    referer: Option<String>,
+    cookie: Option<String>,
+    user_agent: Option<String>,
+    request_headers: Vec<RemoteRequestHeader>,
+) -> Result<Vec<u8>, AppError> {
+    log::info!("fetch_remote_bytes: url={}", summarize_url_for_log(&url));
+
+    let builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(5));
+    let client =
+        crate::commands::http_client::apply_explicit_proxy(builder, &proxy, "fetch_remote_bytes")
+            .build()
+            .map_err(|e| AppError::Io(format!("GET client init failed: {e}")))?;
+
+    let req = apply_remote_request_headers(
+        client.get(&url),
+        referer.as_deref(),
+        cookie.as_deref(),
+        user_agent.as_deref(),
+        &request_headers,
+    );
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| AppError::Io(format!("GET request failed: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(AppError::Io(format!(
+            "GET request failed with HTTP {}",
+            resp.status()
+        )));
+    }
+    if let Some(len) = resp.content_length() {
+        if len as usize > MAX_TORRENT_SIZE {
+            return Err(AppError::Io(format!(
+                "Response too large: {len} bytes (max {MAX_TORRENT_SIZE})"
+            )));
+        }
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| AppError::Io(format!("Failed to read response body: {e}")))?;
+    if bytes.len() > MAX_TORRENT_SIZE {
+        return Err(AppError::Io(format!(
+            "Response too large: {} bytes (max {MAX_TORRENT_SIZE})",
+            bytes.len()
+        )));
+    }
+
+    log::info!("fetch_remote_bytes: downloaded {} bytes", bytes.len());
+    Ok(bytes.to_vec())
 }
 
 fn parse_content_disposition_filename(headers: &reqwest::header::HeaderMap) -> Option<String> {
@@ -478,62 +543,42 @@ fn decode_rfc2047_filename(filename: String) -> String {
     }
 }
 
-// ── Remote byte fetching ────────────────────────────────────────────────
-
-#[tauri::command]
-pub async fn fetch_remote_bytes(url: String, proxy: Option<String>) -> Result<Vec<u8>, AppError> {
-    log::info!("fetch_remote_bytes: url={url:?}");
-
-    let builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(5));
-    let client = apply_optional_proxy(builder, &proxy)
-        .build()
-        .map_err(|e| AppError::Io(format!("HTTP client init failed: {e}")))?;
-
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::Io(format!("HTTP request failed: {e}")))?;
-
-    if !resp.status().is_success() {
-        return Err(AppError::Io(format!("HTTP {}", resp.status())));
+fn summarize_url_for_log(value: &str) -> String {
+    let lower = value.to_lowercase();
+    if lower.starts_with("magnet:") {
+        return format!("scheme=magnet length={}", value.len());
+    }
+    if lower.starts_with("ed2k://") {
+        return format!("scheme=ed2k length={}", value.len());
+    }
+    if lower.starts_with("thunder://") {
+        return format!("scheme=thunder length={}", value.len());
     }
 
-    // Check Content-Length header upfront to reject oversized responses early
-    if let Some(len) = resp.content_length() {
-        if len as usize > MAX_TORRENT_SIZE {
-            return Err(AppError::Io(format!(
-                "Response too large: {len} bytes (max {MAX_TORRENT_SIZE})"
-            )));
+    match url::Url::parse(value) {
+        Ok(parsed) => {
+            let scheme = parsed.scheme();
+            let host = parsed.host_str().unwrap_or("none");
+            let ext = parsed
+                .path_segments()
+                .and_then(|mut segments| segments.next_back())
+                .and_then(|name| name.rsplit_once('.').map(|(_, ext)| ext))
+                .filter(|ext| !ext.is_empty() && ext.len() <= 16)
+                .unwrap_or("none");
+            format!(
+                "scheme={scheme} host={host} ext={} has_query={} length={}",
+                ext.to_ascii_lowercase(),
+                parsed.query().is_some(),
+                value.len()
+            )
         }
+        Err(_) => format!("parseable=false length={}", value.len()),
     }
-
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| AppError::Io(format!("Failed to read response body: {e}")))?;
-
-    if bytes.len() > MAX_TORRENT_SIZE {
-        return Err(AppError::Io(format!(
-            "Response too large: {} bytes (max {MAX_TORRENT_SIZE})",
-            bytes.len()
-        )));
-    }
-
-    log::info!("fetch_remote_bytes: downloaded {} bytes", bytes.len());
-    Ok(bytes.to_vec())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn max_torrent_size_is_16_mib() {
-        assert_eq!(MAX_TORRENT_SIZE, 16 * 1024 * 1024);
-    }
 
     // ── extract_basename ────────────────────────────────────────────
 
@@ -663,6 +708,11 @@ mod tests {
     }
 
     #[test]
+    fn max_torrent_size_is_16_mib() {
+        assert_eq!(MAX_TORRENT_SIZE, 16 * 1024 * 1024);
+    }
+
+    #[test]
     fn parse_cd_filename_rejects_percent_decoded_path_separators() {
         assert_eq!(
             parse_cd_filename("attachment; filename=\"safe%2Fevil.pdf\""),
@@ -755,6 +805,81 @@ mod tests {
             Some("https://mail.google.com/mail/u/0/#inbox")
         );
         assert_eq!(captured.cookie.as_deref(), Some("COMPASS=gmail=abc"));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_bytes_sends_browser_context_headers() {
+        use axum::{extract::State, http::HeaderMap, routing::get, Router};
+        use std::net::SocketAddr;
+        use std::sync::{Arc, Mutex};
+        use tokio::net::TcpListener;
+
+        #[derive(Default)]
+        struct CapturedHeaders {
+            referer: Option<String>,
+            cookie: Option<String>,
+            user_agent: Option<String>,
+            accept_language: Option<String>,
+        }
+
+        async fn handle_get(
+            State(captured): State<Arc<Mutex<CapturedHeaders>>>,
+            headers: HeaderMap,
+        ) -> &'static [u8] {
+            let mut captured = captured.lock().expect("captured headers mutex poisoned");
+            captured.referer = headers
+                .get(reqwest::header::REFERER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            captured.cookie = headers
+                .get(reqwest::header::COOKIE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            captured.user_agent = headers
+                .get(reqwest::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            captured.accept_language = headers
+                .get(reqwest::header::ACCEPT_LANGUAGE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+
+            b"d4:infode"
+        }
+
+        let captured = Arc::new(Mutex::new(CapturedHeaders::default()));
+        let app = Router::new()
+            .route("/linux.torrent", get(handle_get))
+            .with_state(Arc::clone(&captured));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let bytes = fetch_remote_bytes(
+            format!("http://{addr}/linux.torrent"),
+            None,
+            Some("https://example.com/page".to_string()),
+            Some("sid=1".to_string()),
+            Some("Mozilla/5.0".to_string()),
+            vec![RemoteRequestHeader {
+                name: "Accept-Language".to_string(),
+                value: "en-US".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(bytes, b"d4:infode");
+        let captured = captured.lock().expect("captured headers mutex poisoned");
+        assert_eq!(
+            captured.referer.as_deref(),
+            Some("https://example.com/page")
+        );
+        assert_eq!(captured.cookie.as_deref(), Some("sid=1"));
+        assert_eq!(captured.user_agent.as_deref(), Some("Mozilla/5.0"));
+        assert_eq!(captured.accept_language.as_deref(), Some("en-US"));
     }
 
     #[tokio::test]

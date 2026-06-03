@@ -43,6 +43,7 @@ import MTooltip from '@/components/common/MTooltip.vue'
 import { CloudDownloadOutline } from '@vicons/ionicons5'
 import UpdateDialog from '@/components/preference/UpdateDialog.vue'
 import type { UpdateChannel } from '@shared/types'
+import PreferenceHintLabel from './PreferenceHintLabel.vue'
 
 const { t, locale } = useI18n()
 const preferenceStore = usePreferenceStore()
@@ -201,6 +202,7 @@ const localeOptions = [
   { label: 'Ελληνικά · Greek', value: 'el' },
   { label: 'فارسی · Persian', value: 'fa' },
   { label: 'Magyar · Hungarian', value: 'hu' },
+  { label: 'हिन्दी · Hindi', value: 'hi' },
   { label: 'Bahasa Indonesia · Indonesian', value: 'id' },
   { label: 'Italiano · Italian', value: 'it' },
   { label: 'Norsk Bokmål · Norwegian', value: 'nb' },
@@ -224,6 +226,11 @@ const themeOptions = computed(() => [
   { label: t('preferences.theme-auto'), value: 'auto' },
   { label: t('preferences.theme-light'), value: 'light' },
   { label: t('preferences.theme-dark'), value: 'dark' },
+])
+
+const taskCardModeOptions = computed(() => [
+  { label: t('preferences.task-card-mode-full'), value: 'full' },
+  { label: t('preferences.task-card-mode-compact'), value: 'compact' },
 ])
 
 function handleCheckUpdate() {
@@ -344,7 +351,11 @@ onMounted(async () => {
             : `${t('preferences.select-language')} · Select Language`
         "
       >
-        <NSelect v-model:value="form.locale" :options="fullLocaleOptions" style="width: 280px" />
+        <NSelect
+          v-model:value="form.locale"
+          :options="fullLocaleOptions"
+          class="pref-control-auto pref-control-language"
+        />
       </NFormItem>
 
       <!-- ③ Auto Update -->
@@ -354,7 +365,11 @@ onMounted(async () => {
       </NFormItem>
       <NCollapseTransition :show="form.autoCheckUpdate" class="collapse-indent">
         <NFormItem :label="t('preferences.check-frequency')">
-          <NSelect v-model:value="form.autoCheckUpdateInterval" :options="checkIntervalOptions" style="width: 180px" />
+          <NSelect
+            v-model:value="form.autoCheckUpdateInterval"
+            :options="checkIntervalOptions"
+            class="pref-control-auto"
+          />
         </NFormItem>
       </NCollapseTransition>
       <NFormItem :label="t('preferences.update-channel')">
@@ -376,17 +391,17 @@ onMounted(async () => {
         </NRadioGroup>
       </NFormItem>
       <NFormItem :label="t('preferences.last-check-update-time')">
-        <div style="display: flex; align-items: center; gap: 16px">
+        <div class="pref-inline-row">
           <NButton size="small" @click="handleCheckUpdate">
             <template #icon>
               <NIcon :size="14"><CloudDownloadOutline /></NIcon>
             </template>
             {{ t('app.check-updates-now') }}
           </NButton>
-          <NText v-if="preferenceStore.config.lastCheckUpdateTime" depth="3" style="font-size: 13px">
+          <NText v-if="preferenceStore.config.lastCheckUpdateTime" depth="3" class="pref-inline-row__meta">
             {{ new Date(preferenceStore.config.lastCheckUpdateTime).toLocaleString() }}
           </NText>
-          <NText v-else depth="3" style="font-size: 13px">—</NText>
+          <NText v-else depth="3" class="pref-inline-row__meta">—</NText>
         </div>
       </NFormItem>
       <UpdateDialog ref="updateDialogRef" />
@@ -394,7 +409,7 @@ onMounted(async () => {
       <!-- ④ Appearance -->
       <NDivider title-placement="left">{{ t('preferences.appearance-section') }}</NDivider>
       <NFormItem :label="t('preferences.appearance')">
-        <NSelect v-model:value="form.theme" :options="themeOptions" style="width: 200px" />
+        <NSelect v-model:value="form.theme" :options="themeOptions" class="pref-control-auto" />
       </NFormItem>
       <NFormItem :label="t('preferences.color-scheme')">
         <div class="color-scheme-picker">
@@ -420,6 +435,13 @@ onMounted(async () => {
             {{ t(scheme.labelKey) }}
           </MTooltip>
         </div>
+      </NFormItem>
+      <NFormItem :label="t('preferences.task-card-mode')">
+        <NRadioGroup v-model:value="form.taskCardMode">
+          <NRadioButton v-for="option in taskCardModeOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </NRadioButton>
+        </NRadioGroup>
       </NFormItem>
       <NFormItem v-if="isMac" :label="t('preferences.dock-badge-speed')">
         <NSwitch v-model:value="form.dockBadgeSpeed" />
@@ -454,35 +476,23 @@ onMounted(async () => {
       <NFormItem :label="t('preferences.show-progress-bar')">
         <NSwitch v-model:value="form.showProgressBar" />
       </NFormItem>
-      <NFormItem :label="t('preferences.lightweight-mode')">
+      <NFormItem>
+        <template #label>
+          <PreferenceHintLabel
+            :label="t('preferences.lightweight-mode')"
+            :hint="t('preferences.lightweight-mode-hint')"
+          />
+        </template>
         <NSwitch v-model:value="form.lightweightMode" />
       </NFormItem>
-      <NText
-        depth="3"
-        style="font-size: 12px; display: block; margin-top: -8px; margin-bottom: 8px; padding-left: 50px"
-      >
-        ⓘ {{ t('preferences.lightweight-mode') }}:
-        {{ t('preferences.lightweight-mode-hint') }}
-      </NText>
     </NForm>
     <PreferenceActionBar :is-dirty="isDirty" @save="handleSave" @discard="handleReset" @restart="handleManualRestart" />
   </div>
 </template>
 
 <style scoped>
-.preference-form-wrapper {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.form-preference {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 16px 30px 64px 36px;
-}
-.form-preference :deep(.n-form-item) {
-  padding-left: 50px;
+.pref-control-language {
+  min-width: 260px;
 }
 
 /* ── System info version badge ─────────────────────────────────────── */
@@ -534,12 +544,6 @@ onMounted(async () => {
   font-weight: 500;
   color: var(--m3-outline, rgba(255, 255, 255, 0.38));
   letter-spacing: 0.3px;
-}
-
-/* ── Collapse indent ─────────────────────────────────────────────── */
-.form-preference :deep(.collapse-indent) {
-  position: relative;
-  margin-left: 16px;
 }
 
 /* ── Color Scheme Swatch Picker ───────────────────────────────────── */

@@ -3,26 +3,73 @@ use tauri::{Emitter, Manager};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use super::args::build_start_args;
+use super::args::build_start_args_with_ed2k_bootstrap;
 use super::cleanup::cleanup_port;
-use super::state::{log_engine_stdout, path_to_safe_string, EngineState};
+use super::state::{path_to_safe_string, strip_ansi, EngineState};
+use super::{valid_aria2_log_level, DEFAULT_ARIA2_LOG_LEVEL};
 use crate::services::port_guard;
+use tauri_plugin_store::StoreExt;
 
 static BT_PORT_RECOVERY_IN_FLIGHT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 const ENGINE_SIDECAR_NAME: &str = "motrix-next-engine";
+const DEFAULT_RPC_PORT_STR: &str = "29100";
+const PROXY_ENV_VARS: &[&str] = &[
+    "http_proxy",
+    "https_proxy",
+    "ftp_proxy",
+    "all_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "FTP_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+];
 
-fn recover_bt_port_conflict(app: &tauri::AppHandle) {
+fn sanitized_engine_proxy_env() -> Vec<(&'static str, &'static str)> {
+    PROXY_ENV_VARS.iter().map(|key| (*key, "")).collect()
+}
+
+fn read_aria2_log_level(app: &tauri::AppHandle) -> String {
+    let Some(store) = app.store("config.json").ok() else {
+        return DEFAULT_ARIA2_LOG_LEVEL.to_string();
+    };
+    let Some(level) = store
+        .get("preferences")
+        .and_then(|p| p.get("aria2LogLevel")?.as_str().map(ToString::to_string))
+    else {
+        return DEFAULT_ARIA2_LOG_LEVEL.to_string();
+    };
+    if valid_aria2_log_level(&level) {
+        level
+    } else {
+        DEFAULT_ARIA2_LOG_LEVEL.to_string()
+    }
+}
+
+fn engine_log_config(app: &tauri::AppHandle) -> Result<(String, String), String> {
+    let log_path = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("Failed to get app log dir: {e}"))?
+        .join("aria2-next.log");
+    let log_path = path_to_safe_string(&log_path);
+    let log_level = read_aria2_log_level(app);
+    Ok((log_path, log_level))
+}
+
+fn recover_runtime_port_conflict(app: &tauri::AppHandle, kind: port_guard::PortKind) {
     if BT_PORT_RECOVERY_IN_FLIGHT.swap(true, Ordering::SeqCst) {
         return;
     }
 
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        let recovery = match port_guard::reconcile_bt_ports(&app_handle) {
+        let recovery = match port_guard::reconcile_runtime_ports(&app_handle, &[kind]) {
             Ok(switches) if !switches.is_empty() => {
-                log::warn!("port_guard: recovering BT bind failure switches={switches:?}");
+                log::warn!("port_guard: recovering runtime bind failure switches={switches:?}");
                 let app_for_restart = app_handle.clone();
                 match tokio::task::spawn_blocking(move || {
                     let config =
@@ -40,21 +87,21 @@ fn recover_bt_port_conflict(app: &tauri::AppHandle) {
                         Ok(())
                     }
                     Ok(Err(e)) => {
-                        log::error!("port_guard: BT bind recovery restart failed: {e}");
+                        log::error!("port_guard: runtime bind recovery restart failed: {e}");
                         Err(())
                     }
                     Err(e) => {
-                        log::error!("port_guard: BT bind recovery task failed: {e}");
+                        log::error!("port_guard: runtime bind recovery task failed: {e}");
                         Err(())
                     }
                 }
             }
             Ok(_) => {
-                log::warn!("port_guard: BT bind failure detected but no port was switched");
+                log::warn!("port_guard: runtime bind failure detected but no port was switched");
                 Err(())
             }
             Err(e) => {
-                log::error!("port_guard: BT bind recovery failed: {e}");
+                log::error!("port_guard: runtime bind recovery failed: {e}");
                 Err(())
             }
         };
@@ -121,7 +168,7 @@ pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Resul
     let port = config
         .get("rpc-listen-port")
         .and_then(|v| v.as_str())
-        .unwrap_or("16800");
+        .unwrap_or(DEFAULT_RPC_PORT_STR);
     cleanup_port(port);
 
     // Resolve aria2.conf via Tauri's resource directory — correct for all
@@ -146,7 +193,10 @@ pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Resul
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let args = build_start_args(
+    let (log_file_path, log_level) = engine_log_config(app)?;
+    let ed2k_bootstrap = crate::commands::ed2k::ensure_ed2k_bootstrap_cache(app)
+        .map_err(|e| format!("Failed to prepare ED2K bootstrap cache: {e}"))?;
+    let args = build_start_args_with_ed2k_bootstrap(
         &config,
         if conf_path.exists() {
             log::info!("loading engine config: {}", conf_str);
@@ -160,12 +210,16 @@ pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Resul
         },
         &session_str,
         session_path.exists(),
+        &log_file_path,
+        &log_level,
+        Some((ed2k_bootstrap.0.as_str(), ed2k_bootstrap.1.as_str())),
     );
 
     let sidecar = app
         .shell()
         .sidecar(ENGINE_SIDECAR_NAME)
         .map_err(|e| format!("Failed to create sidecar: {}", e))?
+        .envs(sanitized_engine_proxy_env())
         .args(&args);
 
     let (mut rx, child) = sidecar
@@ -185,9 +239,9 @@ pub fn start_engine(app: &tauri::AppHandle, config: &serde_json::Value) -> Resul
             match event {
                 CommandEvent::Stdout(line) => {
                     let text = String::from_utf8_lossy(&line);
-                    log_engine_stdout(&text);
-                    if port_guard::aria2_bt_bind_error_line(&text) {
-                        recover_bt_port_conflict(&app_handle);
+                    let text = strip_ansi(&text);
+                    if let Some(kind) = port_guard::aria2_runtime_bind_error_kind(&text) {
+                        recover_runtime_port_conflict(&app_handle, kind);
                     }
                 }
                 CommandEvent::Stderr(line) => {
@@ -341,7 +395,7 @@ pub fn restart_engine(app: &tauri::AppHandle, _config: &serde_json::Value) -> Re
     let port = config
         .get("rpc-listen-port")
         .and_then(|v| v.as_str())
-        .unwrap_or("16800");
+        .unwrap_or(DEFAULT_RPC_PORT_STR);
     cleanup_port(port);
 
     // Step 3: Spawn new Aria2 Next (inlined from start_engine to keep lock held)
@@ -367,7 +421,10 @@ pub fn restart_engine(app: &tauri::AppHandle, _config: &serde_json::Value) -> Re
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let args = build_start_args(
+    let (log_file_path, log_level) = engine_log_config(app)?;
+    let ed2k_bootstrap = crate::commands::ed2k::ensure_ed2k_bootstrap_cache(app)
+        .map_err(|e| format!("Failed to prepare ED2K bootstrap cache: {e}"))?;
+    let args = build_start_args_with_ed2k_bootstrap(
         &config,
         if conf_path.exists() {
             log::info!("restart: loading engine config: {}", conf_str);
@@ -381,12 +438,16 @@ pub fn restart_engine(app: &tauri::AppHandle, _config: &serde_json::Value) -> Re
         },
         &session_str,
         session_path.exists(),
+        &log_file_path,
+        &log_level,
+        Some((ed2k_bootstrap.0.as_str(), ed2k_bootstrap.1.as_str())),
     );
 
     let sidecar = app
         .shell()
         .sidecar(ENGINE_SIDECAR_NAME)
         .map_err(|e| format!("Failed to create sidecar: {}", e))?
+        .envs(sanitized_engine_proxy_env())
         .args(&args);
 
     let (mut rx, child) = sidecar
@@ -412,9 +473,9 @@ pub fn restart_engine(app: &tauri::AppHandle, _config: &serde_json::Value) -> Re
             match event {
                 CommandEvent::Stdout(line) => {
                     let text = String::from_utf8_lossy(&line);
-                    log_engine_stdout(&text);
-                    if port_guard::aria2_bt_bind_error_line(&text) {
-                        recover_bt_port_conflict(&app_handle);
+                    let text = strip_ansi(&text);
+                    if let Some(kind) = port_guard::aria2_runtime_bind_error_kind(&text) {
+                        recover_runtime_port_conflict(&app_handle, kind);
                     }
                 }
                 CommandEvent::Stderr(line) => {
@@ -475,4 +536,20 @@ pub fn restart_engine(app: &tauri::AppHandle, _config: &serde_json::Value) -> Re
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitized_engine_proxy_env_clears_lowercase_and_uppercase_proxy_vars() {
+        let env = sanitized_engine_proxy_env();
+
+        for key in PROXY_ENV_VARS {
+            assert!(env
+                .iter()
+                .any(|(name, value)| name == key && value.is_empty()));
+        }
+    }
 }

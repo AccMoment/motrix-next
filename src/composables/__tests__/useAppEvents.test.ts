@@ -85,6 +85,7 @@ function createDeps() {
     showAddTaskDialog: vi.fn(),
     enqueueBatch: vi.fn(() => 0),
     handleDeepLinkUrls: vi.fn(),
+    handleExternalInputs: vi.fn(),
     setExternalInputErrorHandler: vi.fn(),
     setExternalInputStartHandler: vi.fn(),
     engineReady: false,
@@ -108,7 +109,7 @@ function createDeps() {
     saveBeforeLeave: null as (() => Promise<void>) | null,
     updatePreference: vi.fn(),
     config: {
-      rpcListenPort: 16800,
+      rpcListenPort: 29100,
       rpcSecret: '',
       lightweightMode: false,
     },
@@ -358,12 +359,12 @@ describe('useAppEvents', () => {
 
     await setupListeners()
     eventCallbacks['port-auto-switched']?.({
-      payload: [{ kind: 'bt', oldPort: 21301, newPort: 20000 }],
+      payload: [{ kind: 'bt', oldPort: 29120, newPort: 29800 }],
     })
 
     expect(message.success).toHaveBeenCalledWith('preferences.port-auto-switched')
     expect(deps.preferenceStore.updatePreference).toHaveBeenCalledWith({
-      listenPort: 20000,
+      listenPort: 29800,
     })
   })
 
@@ -373,11 +374,11 @@ describe('useAppEvents', () => {
 
     await setupListeners()
     eventCallbacks['port-auto-switched']?.({
-      payload: [{ kind: 'ed2k', oldPort: 4662, newPort: 30000 }],
+      payload: [{ kind: 'ed2k', oldPort: 29140, newPort: 29810 }],
     })
 
     expect(deps.preferenceStore.updatePreference).toHaveBeenCalledWith({
-      ed2kListenPort: 30000,
+      ed2kListenPort: 29810,
     })
   })
 
@@ -389,13 +390,40 @@ describe('useAppEvents', () => {
     eventCallbacks['port-auto-switch-failed']?.({
       payload: {
         kind: 'bt',
-        port: 21301,
+        port: 29120,
         reason: 'disabled',
         source: 'bt-runtime',
       },
     })
 
     expect(message.warning).toHaveBeenCalledWith('preferences.port-auto-switch-disabled')
+  })
+
+  it('deduplicates concurrent engine recovered readiness probes', async () => {
+    let resolveWait: ((ready: boolean) => void) | undefined
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'wait_for_engine') {
+        return new Promise((resolve) => {
+          resolveWait = resolve
+        })
+      }
+      return Promise.resolve([])
+    })
+    const { deps } = createDeps()
+    const { setupListeners } = mountComposable(deps)
+
+    await setupListeners()
+    const first = eventCallbacks['engine-recovered']?.({ payload: { source: 'bt-port-auto-switch' } })
+    const second = eventCallbacks['engine-recovered']?.({ payload: { source: 'bt-port-auto-switch' } })
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0)
+    })
+
+    expect(invokeMock).toHaveBeenCalledWith('wait_for_engine')
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'wait_for_engine')).toHaveLength(1)
+
+    resolveWait?.(true)
+    await Promise.all([first, second])
   })
 
   it('opens the add-task dialog from a pending tray action after listeners are ready', async () => {
@@ -441,5 +469,37 @@ describe('useAppEvents', () => {
 
     expect(appStore.handleDeepLinkUrls).toHaveBeenCalledWith([deepLink])
     expect(loggerMock.info).toHaveBeenCalledWith('ExternalInput', expect.stringContaining('queued=1'))
+  })
+
+  it('attaches the external input trace id before routing structured payloads', async () => {
+    const { deps, appStore } = createDeps()
+    appStore.handleExternalInputs.mockReturnValueOnce({ received: 1, queued: 1, autoSubmitted: 0, ignored: 0 })
+    const { setupListeners } = mountComposable(deps)
+
+    await setupListeners()
+    await eventCallbacks['external-input-open']?.({
+      payload: {
+        inputs: [
+          {
+            url: 'https://example.com/file.zip?token=secret',
+            cookie: 'session=secret',
+            userAgent: 'BrowserUA/1.0',
+            requestHeaders: [{ name: 'Accept', value: 'application/octet-stream' }],
+            source: 'http-api',
+          },
+        ],
+        silent: false,
+      },
+    })
+
+    expect(appStore.handleExternalInputs).toHaveBeenCalledWith([
+      expect.objectContaining({
+        url: 'https://example.com/file.zip?token=secret',
+        traceId: expect.stringMatching(/^external-input-/),
+      }),
+    ])
+    expect(loggerMock.info.mock.calls.flat().join(' ')).not.toContain('session=secret')
+    expect(loggerMock.info.mock.calls.flat().join(' ')).not.toContain('token=secret')
+    expect(loggerMock.info.mock.calls.flat().join(' ')).not.toContain('BrowserUA')
   })
 })

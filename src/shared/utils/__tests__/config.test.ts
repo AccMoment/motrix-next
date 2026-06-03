@@ -9,7 +9,6 @@ import {
   separateConfig,
   diffConfig,
   checkIsNeedRestart,
-  checkIsNeedRun,
   buildRpcUrl,
   formatOptionsForEngine,
   parseHeader,
@@ -34,10 +33,16 @@ describe('changeKeysToKebabCase', () => {
   })
 
   it('keeps ED2K as one aria2 option prefix', () => {
-    expect(changeKeysToKebabCase({ ed2kListenPort: 4663, ed2kShareFiles: ['/tmp/shared.bin'] })).toEqual({
+    expect(
+      changeKeysToKebabCase({ ed2kListenPort: 4663, ed2kServerMetUrl: 'https://example.test/server.met' }),
+    ).toEqual({
       'ed2k-listen-port': 4663,
-      'ed2k-share-files': ['/tmp/shared.bin'],
+      'ed2k-server-met-url': 'https://example.test/server.met',
     })
+  })
+
+  it('keeps Aria2 as one engine name prefix', () => {
+    expect(changeKeysToKebabCase({ aria2LogLevel: 'warn' })).toEqual({ 'aria2-log-level': 'warn' })
   })
 })
 
@@ -104,16 +109,16 @@ describe('diffConfig', () => {
     expect(result).toEqual({ proxy: { host: 'b' } })
   })
 
-  it('treats coerce-equal primitives as unchanged (string "21301" vs number 21301)', () => {
+  it('treats coerce-equal primitives as unchanged (string "29120" vs number 29120)', () => {
     const result = diffConfig(
-      { listenPort: '21301', dhtListenPort: '26701' },
-      { listenPort: 21301, dhtListenPort: 26701 },
+      { listenPort: '29120', dhtListenPort: '29130' },
+      { listenPort: 29120, dhtListenPort: 29130 },
     )
     expect(result).toEqual({})
   })
 
   it('still detects genuinely different values across types', () => {
-    const result = diffConfig({ listenPort: '21301' }, { listenPort: 21302 })
+    const result = diffConfig({ listenPort: '29120' }, { listenPort: 21302 })
     expect(result).toEqual({ listenPort: 21302 })
   })
 })
@@ -134,13 +139,18 @@ describe('checkIsNeedRestart', () => {
   it('returns true for dhtListenPort', () => {
     expect(checkIsNeedRestart({ dhtListenPort: 26702 })).toBe(true)
   })
+  it('returns true for BT discovery and encryption session keys', () => {
+    expect(checkIsNeedRestart({ btDhtEnabled: false })).toBe(true)
+    expect(checkIsNeedRestart({ btPeerExchangeEnabled: false })).toBe(true)
+    expect(checkIsNeedRestart({ btLocalPeerDiscoveryEnabled: false })).toBe(true)
+    expect(checkIsNeedRestart({ btForceEncryption: true })).toBe(true)
+    expect(checkIsNeedRestart({ btMaxPeers: 256 })).toBe(true)
+    expect(checkIsNeedRestart({ aria2LogLevel: 'info' })).toBe(true)
+  })
   it('returns true for ED2K restart keys from AppConfig camelCase fields', () => {
     expect(checkIsNeedRestart({ ed2kListenPort: 4663 })).toBe(true)
     expect(checkIsNeedRestart({ ed2kServer: 'server.example:4661' })).toBe(true)
-    expect(checkIsNeedRestart({ ed2kServerList: '/tmp/server.met' })).toBe(true)
-    expect(checkIsNeedRestart({ ed2kNodeList: '/tmp/nodes.dat' })).toBe(true)
     expect(checkIsNeedRestart({ ed2kUploadSlots: 4 })).toBe(true)
-    expect(checkIsNeedRestart({ ed2kShareFiles: ['/tmp/shared.bin'] })).toBe(true)
   })
   it('returns false for non-restart keys', () => {
     expect(checkIsNeedRestart({ theme: 'dark' })).toBe(false)
@@ -153,22 +163,10 @@ describe('checkIsNeedRestart', () => {
     // Simulates the real bug: prevConfig stores ports as strings,
     // form uses numbers, but the actual values are identical.
     const changed = diffConfig(
-      { listenPort: '21301', dhtListenPort: '26701', rpcListenPort: 16800, rpcSecret: 'abc' },
-      { listenPort: 21301, dhtListenPort: 26701, rpcListenPort: 16800, rpcSecret: 'abc' },
+      { listenPort: '29120', dhtListenPort: '29130', rpcListenPort: 29100, rpcSecret: 'abc' },
+      { listenPort: 29120, dhtListenPort: 29130, rpcListenPort: 29100, rpcSecret: 'abc' },
     )
     expect(checkIsNeedRestart(changed)).toBe(false)
-  })
-})
-
-describe('checkIsNeedRun', () => {
-  it('returns false when disabled', () => {
-    expect(checkIsNeedRun(false, 0, 1000)).toBe(false)
-  })
-  it('returns true when interval exceeded', () => {
-    expect(checkIsNeedRun(true, Date.now() - 10000, 5000)).toBe(true)
-  })
-  it('returns false when within interval', () => {
-    expect(checkIsNeedRun(true, Date.now() - 1000, 5000)).toBe(false)
   })
 })
 
@@ -188,8 +186,16 @@ describe('formatOptionsForEngine', () => {
     expect(result).toHaveProperty('max-speed')
   })
   it('formats ED2K option keys with the aria2 ED2K prefix', () => {
-    const result = formatOptionsForEngine({ ed2kListenPort: 4663, ed2kServerList: '/tmp/server.met' })
-    expect(result).toEqual({ 'ed2k-listen-port': '4663', 'ed2k-server-list': '/tmp/server.met' })
+    const result = formatOptionsForEngine({
+      ed2kListenPort: 4663,
+      ed2kUdpListenPort: 4673,
+      ed2kServerMetUrl: 'https://example.test/server.met',
+    })
+    expect(result).toEqual({
+      'ed2k-listen-port': '4663',
+      'ed2k-udp-listen-port': '4673',
+      'ed2k-server-met-url': 'https://example.test/server.met',
+    })
   })
   it('joins arrays with newline', () => {
     const result = formatOptionsForEngine({ trackerSource: ['a', 'b'] })
@@ -200,16 +206,14 @@ describe('formatOptionsForEngine', () => {
     expect(Object.keys(result)).toHaveLength(0)
   })
 
-  it('forwards empty-string values (aria2 uses them to clear options like all-proxy)', () => {
-    // Verified in aria2 source: HttpProxyOptionHandler::parseArg (OptionHandlerImpl.cc:504)
-    // accepts empty string to clear the proxy. Filtering '' prevents proxy disable.
-    const result = formatOptionsForEngine({ allProxy: '', noProxy: '' })
-    expect(result['all-proxy']).toBe('')
-    expect(result['no-proxy']).toBe('')
+  it('forwards empty-string values for aria2 options that intentionally accept them', () => {
+    const result = formatOptionsForEngine({ userAgent: '', referer: '' })
+    expect(result['user-agent']).toBe('')
+    expect(result.referer).toBe('')
   })
   it('keeps numeric 0 value (converted to string)', () => {
-    const result = formatOptionsForEngine({ seedTime: 0 })
-    expect(result['seed-time']).toBe('0')
+    const result = formatOptionsForEngine({ shareTime: 0 })
+    expect(result['share-time']).toBe('0')
   })
   it('converts boolean to string', () => {
     const result = formatOptionsForEngine({ checkIntegrity: true })
@@ -252,6 +256,7 @@ describe('filterHotReloadableKeys', () => {
       'max-concurrent-downloads': '10',
       'max-connection-per-server': '16',
       'max-overall-download-limit': '0',
+      'async-dns': 'false',
       dir: '/downloads',
     }
     expect(filterHotReloadableKeys(config)).toEqual(config)
@@ -259,11 +264,18 @@ describe('filterHotReloadableKeys', () => {
 
   it('strips restart-required keys (ports + secret)', () => {
     const config = {
-      'rpc-listen-port': '16800',
+      'rpc-listen-port': '29100',
       'rpc-secret': 'abc',
-      'listen-port': '21301',
-      'dht-listen-port': '26701',
+      'listen-port': '29120',
+      'dht-listen-port': '29130',
+      'ed2k-listen-port': '29140',
+      'ed2k-udp-listen-port': '29150',
       'enable-dht': 'true',
+      'enable-peer-exchange': 'true',
+      'bt-enable-lpd': 'true',
+      'bt-force-encryption': 'false',
+      'bt-require-crypto': 'false',
+      'bt-max-peers': '128',
     }
     expect(filterHotReloadableKeys(config)).toEqual({})
   })
@@ -280,15 +292,11 @@ describe('filterHotReloadableKeys', () => {
     expect(filterHotReloadableKeys(config)).toEqual({})
   })
 
-  it('strips log-level (needs app relaunch, not engine restart)', () => {
-    expect(filterHotReloadableKeys({ 'log-level': 'debug' })).toEqual({})
-  })
-
-  it('strips engine options removed by Aria2 Next', () => {
+  it('strips unsupported engine keys by allowlist', () => {
     const config = {
-      'bt-save-metadata': 'true',
-      'bt-seed-unverified': 'false',
-      'http-auth-challenge': 'true',
+      'not-supported': 'true',
+      'stale-local-key': 'false',
+      'future-unknown-key': '203.0.113.1',
       'max-overall-download-limit': '1M',
     }
     expect(filterHotReloadableKeys(config)).toEqual({
@@ -303,7 +311,7 @@ describe('filterHotReloadableKeys', () => {
   it('separates hot-reloadable from non-hot-reloadable in mixed input', () => {
     const config = {
       'max-concurrent-downloads': '8',
-      'rpc-listen-port': '16800',
+      'rpc-listen-port': '29100',
       'bt-tracker': 'udp://t.example.org:6969',
       'rpc-secret': 'secret',
       'user-agent': 'Motrix/3.4.1',

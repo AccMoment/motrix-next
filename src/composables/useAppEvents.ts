@@ -17,6 +17,7 @@ import { detectKind, createBatchItem } from '@shared/utils/batchHelpers'
 import { createExternalInputTraceId, summarizeExternalInputBatch } from '@shared/utils/externalInputDiagnostics'
 import { getErrorMessage } from '@shared/utils/errorMessage'
 import { isMotrixNewTaskLink } from '@shared/utils/motrixDeepLink'
+import type { ExternalDownloadInput } from '@shared/types'
 import { handleTaskStart } from '@/composables/useTaskNotifyHandlers'
 import { onUnmounted, watch, type Ref, type WatchStopHandle } from 'vue'
 
@@ -34,6 +35,11 @@ interface PendingDeepLinksPayload {
 
 type DeepLinkEventPayload = string[] | PendingDeepLinksPayload
 
+interface PendingExternalInputsPayload {
+  inputs: ExternalDownloadInput[]
+  silent: boolean
+}
+
 type PendingFrontendActionChannel = 'menu-event' | 'tray-menu-action'
 
 interface PendingFrontendAction {
@@ -42,13 +48,13 @@ interface PendingFrontendAction {
 }
 
 interface PortSwitchEvent {
-  kind: 'rpc' | 'extensionApi' | 'bt' | 'dht' | 'ed2k'
+  kind: 'rpc' | 'extensionApi' | 'bt' | 'dht' | 'ed2k' | 'ed2kUdp'
   oldPort: number
   newPort: number
 }
 
 interface PortSwitchFailureEvent {
-  kind: 'rpc' | 'extensionApi' | 'bt' | 'dht' | 'ed2k'
+  kind: 'rpc' | 'extensionApi' | 'bt' | 'dht' | 'ed2k' | 'ed2kUdp'
   port: number
   reason: 'disabled' | 'noAvailablePort' | 'bindFailed'
   source: 'startup' | 'btRuntime' | 'extensionApi'
@@ -60,6 +66,7 @@ interface AppEventsDeps {
     showAddTaskDialog: () => void
     enqueueBatch: (items: ReturnType<typeof createBatchItem>[]) => number
     handleDeepLinkUrls: (urls: string[]) => DeepLinkHandlingResult | void
+    handleExternalInputs: (inputs: ExternalDownloadInput[]) => DeepLinkHandlingResult | void
     setExternalInputErrorHandler?: (handler: ((error: unknown) => void) | null) => void
     setExternalInputStartHandler?: (handler: ((taskNames: string[]) => void) | null) => void
     engineReady: boolean
@@ -83,11 +90,12 @@ interface AppEventsDeps {
     saveBeforeLeave: (() => Promise<void>) | null
     config: {
       rpcListenPort?: string | number
-      rpcSecret?: string
+      rpcSecret: string
       extensionApiPort?: number
       listenPort?: number
       dhtListenPort?: number
       ed2kListenPort?: number
+      ed2kUdpListenPort?: number
       lightweightMode?: boolean
     }
     updatePreference?: (cfg: Record<string, unknown>) => void
@@ -111,6 +119,7 @@ interface AppEventsReturn {
     unlistenMenuEvent: (() => void) | null
     unlistenTrayMenu: (() => void) | null
     unlistenDeepLink: (() => void) | null
+    unlistenExternalInput: (() => void) | null
     unlistenSingleInstance: (() => void) | null
     teardown: () => void
   }>
@@ -133,6 +142,7 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
   const route = useRoute()
   const cleanupFns: Array<() => void> = []
   let silentCleanupTimer: ReturnType<typeof setTimeout> | null = null
+  let engineRecoveredWaitInFlight = false
 
   function registerCleanup(cleanup: (() => void) | null | undefined): () => void {
     let active = true
@@ -226,6 +236,11 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
     const unlistenEngineRecovered = registerCleanup(
       await listen<{ source: string }>('engine-recovered', async (event) => {
         logger.info('MainLayout', `engine recovered (source: ${event.payload.source})`)
+        if (engineRecoveredWaitInFlight) {
+          logger.debug('MainLayout', 'engine-recovered: readiness check already in flight, skipping')
+          return
+        }
+        engineRecoveredWaitInFlight = true
 
         // Rust-side health check with retries — also updates Aria2Client credentials.
         // on_engine_ready() was already called by restart_engine_command before
@@ -246,6 +261,8 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
           logger.error('MainLayout', `engine-recovered: wait_for_engine failed: ${e}`)
           setEngineReady(false)
           appStore.engineReady = false
+        } finally {
+          engineRecoveredWaitInFlight = false
         }
       }),
     )
@@ -266,6 +283,7 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
           bt: t('preferences.bt-port'),
           dht: t('preferences.dht-port'),
           ed2k: t('preferences.ed2k-listen-port'),
+          ed2kUdp: t('preferences.ed2k-udp-listen-port'),
         }
         const ports = switches
           .map((item) => `${labels[item.kind] ?? item.kind} ${item.oldPort} -> ${item.newPort}`)
@@ -277,6 +295,7 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
           if (item.kind === 'bt') patch.listenPort = item.newPort
           if (item.kind === 'dht') patch.dhtListenPort = item.newPort
           if (item.kind === 'ed2k') patch.ed2kListenPort = item.newPort
+          if (item.kind === 'ed2kUdp') patch.ed2kUdpListenPort = item.newPort
         }
         preferenceStore.updatePreference?.(patch)
         message.success(t('preferences.port-auto-switched', { ports }))
@@ -293,6 +312,7 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
           bt: t('preferences.bt-port'),
           dht: t('preferences.dht-port'),
           ed2k: t('preferences.ed2k-listen-port'),
+          ed2kUdp: t('preferences.ed2k-udp-listen-port'),
         }
         const params = {
           label: labels[failure.kind] ?? failure.kind,
@@ -632,8 +652,77 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
     }
   }
 
+  async function processIncomingExternalInputs(inputs: ExternalDownloadInput[], options: { silent?: boolean } = {}) {
+    const traceId = createExternalInputTraceId()
+    const silent = options.silent === true
+    logger.info(
+      'ExternalInput',
+      formatLogFields({
+        traceId,
+        stage: 'received',
+        source: 'structured',
+        route: route.path,
+        silent,
+        count: inputs.length,
+        hasCookie: inputs.some((input) => Boolean(input.cookie)),
+        hasUserAgent: inputs.some((input) => Boolean(input.userAgent)),
+        headerCount: inputs.reduce((count, input) => count + (input.requestHeaders?.length ?? 0), 0),
+      }),
+    )
+    if (!silent) {
+      const mainWindow = getCurrentWindow()
+      await runExternalInputWindowStage(traceId, 'unminimize', () => mainWindow.unminimize())
+      await runExternalInputWindowStage(traceId, 'show', () => mainWindow.show())
+      await runExternalInputWindowStage(traceId, 'setFocus', () => mainWindow.setFocus())
+    }
+
+    if (!silent && inputs.length > 0 && route.path !== '/task/all') {
+      try {
+        await router.push('/task/all')
+        logger.debug('ExternalInput', formatLogFields({ traceId, stage: 'navigate', result: 'ok', route: '/task/all' }))
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        logger.warn(
+          'ExternalInput',
+          formatLogFields({ traceId, stage: 'navigate', result: 'failed', route: '/task/all', reason }),
+        )
+      }
+    }
+
+    logger.info('ExternalInput', formatLogFields({ traceId, stage: 'route-download', result: 'start' }))
+    try {
+      const tracedInputs = inputs.map((input) => ({ ...input, traceId }))
+      const handlingResult = appStore.handleExternalInputs(tracedInputs)
+      logger.info(
+        'ExternalInput',
+        formatLogFields({
+          traceId,
+          stage: 'route-download',
+          result: 'ok',
+          received: handlingResult?.received ?? 'unknown',
+          queued: handlingResult?.queued ?? 'unknown',
+          autoSubmitted: handlingResult?.autoSubmitted ?? 'unknown',
+          ignored: handlingResult?.ignored ?? 'unknown',
+        }),
+      )
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      logger.error('ExternalInput', formatLogFields({ traceId, stage: 'route-download', result: 'failed', reason }))
+      throw error
+    }
+    if (silent) {
+      await scheduleSilentLightweightCleanup(traceId)
+    }
+  }
+
   function normalizeDeepLinkPayload(payload: DeepLinkEventPayload): PendingDeepLinksPayload {
     return Array.isArray(payload) ? { urls: payload, silent: false } : payload
+  }
+
+  function normalizeExternalInputPayload(
+    payload: PendingExternalInputsPayload | ExternalDownloadInput[],
+  ): PendingExternalInputsPayload {
+    return Array.isArray(payload) ? { inputs: payload, silent: false } : payload
   }
 
   async function setupExternalInputListeners() {
@@ -641,6 +730,12 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
       await listen<DeepLinkEventPayload>('deep-link-open', async (event) => {
         const payload = normalizeDeepLinkPayload(event.payload)
         await processIncomingDeepLinks(payload.urls, { silent: payload.silent })
+      }),
+    )
+
+    const unlistenExternalInput = registerCleanup(
+      await listen<PendingExternalInputsPayload>('external-input-open', async (event) => {
+        await processIncomingExternalInputs(event.payload.inputs, { silent: event.payload.silent })
       }),
     )
 
@@ -664,7 +759,7 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
       }),
     )
 
-    return { unlistenDeepLink, unlistenSingleInstance }
+    return { unlistenDeepLink, unlistenExternalInput, unlistenSingleInstance }
   }
 
   // ─── Orchestrator ─────────────────────────────────────────────────
@@ -675,7 +770,7 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
     await setupEngineWatchers()
     setupNavGuard()
 
-    const { unlistenDeepLink, unlistenSingleInstance } = await setupExternalInputListeners()
+    const { unlistenDeepLink, unlistenExternalInput, unlistenSingleInstance } = await setupExternalInputListeners()
     const unlistenDragDrop = await setupDragDropListener()
     const unlistenMenuEvent = await setupMenuListener()
     const unlistenTrayMenu = await setupTrayListener()
@@ -695,6 +790,16 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
         )
         await processIncomingDeepLinks(pendingUrls, { silent })
       }
+      const pendingExternal = normalizeExternalInputPayload(
+        await invoke<PendingExternalInputsPayload | ExternalDownloadInput[]>('take_pending_external_inputs'),
+      )
+      if (pendingExternal.inputs.length > 0) {
+        logger.info(
+          'AppEvents',
+          `consuming ${pendingExternal.inputs.length} pending external input(s) from window recreation silent=${pendingExternal.silent}`,
+        )
+        await processIncomingExternalInputs(pendingExternal.inputs, { silent: pendingExternal.silent })
+      }
       const pendingActions = await invoke<PendingFrontendAction[]>('take_pending_frontend_actions')
       if (pendingActions.length > 0) {
         logger.info('AppEvents', `consuming ${pendingActions.length} pending frontend action(s) from window recreation`)
@@ -710,7 +815,15 @@ export function useAppEvents(deps: AppEventsDeps): AppEventsReturn {
       logger.debug('AppEvents.pendingNativeEvents', e)
     }
 
-    return { unlistenDragDrop, unlistenMenuEvent, unlistenTrayMenu, unlistenDeepLink, unlistenSingleInstance, teardown }
+    return {
+      unlistenDragDrop,
+      unlistenMenuEvent,
+      unlistenTrayMenu,
+      unlistenDeepLink,
+      unlistenExternalInput,
+      unlistenSingleInstance,
+      teardown,
+    }
   }
 
   return { setupListeners }

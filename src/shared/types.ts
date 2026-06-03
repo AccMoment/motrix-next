@@ -34,6 +34,7 @@ export interface Aria2Ed2kInfo {
   hash?: string
   name?: string
   length?: string
+  completedLength?: string
   partHashCount?: string
   aichRoot?: string
   serverCount?: string
@@ -42,6 +43,8 @@ export interface Aria2Ed2kInfo {
   queuedPeerCount?: string
   acceptedPeerCount?: string
   deadPeerCount?: string
+  lowIdPeerCount?: string
+  callbackWaitingPeerCount?: string
   kadNodeCount?: string
   kadRouterCount?: string
   kadFirewalled?: boolean
@@ -49,7 +52,6 @@ export interface Aria2Ed2kInfo {
   searchActive?: boolean
   searchMoreResults?: boolean
   searchResultCount?: string
-  sharedFileCount?: string
   uploadingPeerCount?: string
   waitingUploadPeerCount?: string
   peerCreditCount?: string
@@ -156,10 +158,12 @@ export interface Aria2RawGlobalStat {
   [key: string]: string
 }
 
-/** HTTP/SOCKS proxy configuration for aria2 and tracker requests. */
+/** HTTP proxy configuration for download tasks and scoped app requests. */
 export interface ProxyConfig {
-  enable: boolean
+  mode?: import('@shared/utils/proxyPolicy').EngineProxyMode
   server: string
+  username?: string
+  password?: string
   bypass?: string
   scope?: string[]
 }
@@ -177,14 +181,6 @@ export interface SystemProxyInfo {
 
 export type UpdateChannel = 'stable' | 'beta' | 'latest'
 export type ResolvedUpdateChannel = Exclude<UpdateChannel, 'latest'>
-
-/** Protocol handler registration settings (system-level). */
-export interface ProtocolsConfig {
-  magnet: boolean
-  ed2k: boolean
-  thunder: boolean
-  motrixnext: boolean
-}
 
 /** Clipboard auto-detection filter: controls which protocol families
  *  trigger the "new task" dialog when a URL is detected in the clipboard. */
@@ -215,6 +211,7 @@ export interface PortConflictRecoveryConfig {
   bt: boolean
   dht: boolean
   ed2k: boolean
+  ed2kUdp: boolean
 }
 
 /** A file category rule mapping extensions to a download directory. */
@@ -229,6 +226,24 @@ export interface FileCategory {
   builtIn?: boolean
 }
 
+export interface UserAgentProfile {
+  id: string
+  name: string
+  value: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UserAgentRule {
+  id: string
+  enabled: boolean
+  hostPattern: string
+  profileId: string
+  overridePlugin: boolean
+  createdAt: number
+  updatedAt: number
+}
+
 /** Application user preferences with full type coverage. */
 export interface AppConfig {
   /** Schema version for config migration. Absent in pre-migration configs (treated as 0). */
@@ -239,6 +254,7 @@ export interface AppConfig {
   dbSchemaVersion: number
   theme: 'auto' | 'light' | 'dark'
   colorScheme: string
+  taskCardMode: 'full' | 'compact'
   locale: string
   dir: string
   split: number
@@ -267,17 +283,21 @@ export interface AppConfig {
   fileCategoryEnabled: boolean
   /** User-configurable file classification rules. */
   fileCategories: FileCategory[]
-  seedTime: number
-  seedRatio: number
+  shareTime: number
+  shareRatio: number
   btMaxPeers: number
+  btDhtEnabled: boolean
+  btPeerExchangeEnabled: boolean
+  btLocalPeerDiscoveryEnabled: boolean
   openAtLogin: boolean
   autoCheckUpdate: boolean
   autoHideWindow: boolean
   minimizeToTrayOnClose: boolean
   hideDockOnMinimize: boolean
   lightweightMode: boolean
-  autoSyncTracker: boolean
-  keepSeeding: boolean
+  btTrackerAutoSync: boolean
+  btTrackerSyncIntervalHours: number
+  keepSharing: boolean
   keepWindowState: boolean
 
   newTaskShowDownloading: boolean
@@ -293,18 +313,17 @@ export interface AppConfig {
   traySpeedometer: boolean
   dockBadgeSpeed: boolean
   logLevel: string
+  aria2LogLevel: string
   engineBinPath: string
   /** Directory for internal temporary engine files. Empty means the OS temporary directory. */
   tempFilesDir: string
   cookie: string
   proxy: ProxyConfig
-  protocols: ProtocolsConfig
   clipboard: ClipboardConfig
   /** When true, extension-intercepted URI downloads bypass the AddTask dialog. */
   autoSubmitFromExtension: boolean
-  /** When true, extension-intercepted torrent and magnet tasks
-   *  skip file selection and download every file. */
-  autoSelectAllFilesFromExtension: boolean
+  /** When true, extension-intercepted BT tasks skip file selection and download every file. */
+  autoSelectAllBtFilesFromExtension: boolean
   /** When true, auto-submitted extension downloads are handled in the
    *  background without raising the main window. Only applies when
    *  autoSubmitFromExtension is enabled. */
@@ -320,15 +339,18 @@ export interface AppConfig {
   updateChannel: UpdateChannel
   runMode: string
   userAgent: string
+  userAgentProfiles: UserAgentProfile[]
+  userAgentRules: UserAgentRule[]
+  recentUserAgentProfileIds: string[]
   rpcListenPort: number
   /** Port for the embedded HTTP API that browser extensions use to submit
-   *  downloads.  Defaults to 16801 (one above the aria2 RPC port). */
+   *  downloads. Defaults to 29110. */
   extensionApiPort: number
-  /** Shared secret for the extension HTTP API.  The browser extension must
+  /** Shared secret for the extension HTTP API. The browser extension must
    *  send this as a `Bearer` token in the `Authorization` header.
-   *  Absent from defaults — auto-generated on first launch in main.ts.
-   *  undefined → auto-generate. '' → user intentionally cleared. */
-  extensionApiSecret?: string
+   *  Empty string means the user intentionally cleared it. */
+  extensionApiSecret: string
+  /** Shared secret for the aria2 RPC API. Empty string means the user intentionally cleared it. */
   rpcSecret: string
   /** Automatically switches locally bound ports when another process or OS reservation blocks them. */
   autoChangeConflictingPorts: boolean
@@ -336,14 +358,15 @@ export interface AppConfig {
   listenPort: number
   dhtListenPort: number
   ed2kListenPort: number
+  ed2kUdpListenPort: number
   ed2kServer: string
-  ed2kServerList: string
-  ed2kNodeList: string
+  ed2kServerMetUrl: string
+  ed2kNodesDatUrl: string
+  ed2kBootstrapAutoSync: boolean
+  ed2kBootstrapSyncIntervalHours: number
   ed2kUploadSlots: number
-  ed2kShareFiles: string[]
   ed2kSearchTimeout: number
   btTracker: string
-  forceSave: boolean
   btForceEncryption: boolean
   pauseMetadata: boolean
   continue: boolean
@@ -355,6 +378,8 @@ export interface AppConfig {
   deleteTorrentAfterComplete: boolean
   autoDeleteStaleRecords: boolean
   clearCompletedOnExit: boolean
+  /** Completed history retention in days. 0 means keep forever. */
+  completedRecordRetentionDays: number
   /** When true, the system shuts down after all downloads complete. */
   shutdownWhenComplete: boolean
   /** When true, prevents system idle sleep while downloads are active.
@@ -372,14 +397,40 @@ export interface AppConfig {
   /** Disk space pre-allocation method. Maps to aria2 --file-allocation.
    *  Values: 'none' | 'trunc' | 'prealloc' | 'falloc' */
   fileAllocation: string
+  /** Enables c-ares based asynchronous DNS resolution. Maps to aria2 --async-dns. */
+  asyncDns: boolean
   /** Per-tab sort configuration (field + direction), persisted independently per tab. */
   taskSort: import('@/composables/useTaskSort').TaskSortConfig
+  /** Per-tab manual task order. Unknown tasks are inserted above stored tasks. */
+  taskManualOrder: import('@/composables/useTaskSort').TaskManualOrderConfig
   [key: string]: unknown
 }
 
 /** Aria2 engine option dictionary passed to RPC calls (kebab-case keys after formatting). */
 export interface Aria2EngineOptions {
   [key: string]: string | string[] | undefined
+}
+
+export interface BrowserRequestHeader {
+  name: string
+  value: string
+}
+
+export interface ExternalDownloadContext {
+  url?: string
+  finalUrl?: string
+  referer?: string
+  cookie?: string
+  userAgent?: string
+  requestHeaders?: BrowserRequestHeader[]
+  traceId?: string
+}
+
+export interface ExternalDownloadInput extends ExternalDownloadContext {
+  url: string
+  finalUrl?: string
+  filename?: string
+  source?: string
 }
 
 /** Saved HTTP Basic authentication credential scoped to a normalized URL origin. */
@@ -450,6 +501,8 @@ export interface BatchItem {
   displayName: string
   /** URI text (for uri kind) or base64-encoded file content (for torrent). */
   payload: string
+  /** Browser request context captured by the extension for this item. */
+  browserContext?: ExternalDownloadContext
   /** Parsed torrent metadata — only present for torrent items. */
   torrentMeta?: { infoHash: string; files: { idx: number; path: string; length: number }[] }
   /** Selected file indices for torrent selective download. */

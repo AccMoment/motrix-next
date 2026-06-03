@@ -21,8 +21,9 @@ pub use commands::protocol::try_run_elevated;
 use crate::commands::power::ShutdownCancelState;
 use crate::commands::updater::{DownloadedUpdate, UpdateCancelState};
 use engine::EngineState;
+use services::port_guard::DEFAULT_RPC_PORT;
 use tauri::{Emitter, Manager};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_store::StoreExt;
 use upnp::UpnpState;
@@ -68,58 +69,6 @@ pub(crate) fn read_log_level() -> log::LevelFilter {
 /// defence-in-depth check.
 pub struct AppLifecycleState {
     is_cold_start: std::sync::atomic::AtomicBool,
-}
-
-#[cfg(any(target_os = "linux", test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProtocolPreference {
-    scheme: &'static str,
-    enabled: bool,
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn protocol_preferences_from_value(
-    preferences: Option<&serde_json::Value>,
-) -> Vec<ProtocolPreference> {
-    const DEFAULTS: [ProtocolPreference; 4] = [
-        ProtocolPreference {
-            scheme: "magnet",
-            enabled: true,
-        },
-        ProtocolPreference {
-            scheme: "ed2k",
-            enabled: true,
-        },
-        ProtocolPreference {
-            scheme: "thunder",
-            enabled: false,
-        },
-        ProtocolPreference {
-            scheme: "motrixnext",
-            enabled: true,
-        },
-    ];
-
-    let protocols = preferences.and_then(|p| p.get("protocols"));
-    DEFAULTS
-        .iter()
-        .map(|pref| ProtocolPreference {
-            scheme: pref.scheme,
-            enabled: protocols
-                .and_then(|p| p.get(pref.scheme))
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(pref.enabled),
-        })
-        .collect()
-}
-
-#[cfg(target_os = "linux")]
-fn protocol_preferences_from_store(app: &tauri::AppHandle) -> Vec<ProtocolPreference> {
-    let store_prefs = app
-        .store("config.json")
-        .ok()
-        .and_then(|s| s.get("preferences"));
-    protocol_preferences_from_value(store_prefs.as_ref())
 }
 
 impl Default for AppLifecycleState {
@@ -233,6 +182,7 @@ pub(crate) fn handle_minimize_to_tray(app: &tauri::AppHandle, window: &tauri::We
         log::info!("tray:lightweight-destroy label={}", window.label());
         save_window_state_before_lightweight_destroy(app);
         services::deep_link::mark_frontend_unready(app);
+        services::external_input::mark_frontend_unready(app);
         services::frontend_action::mark_frontend_actions_unready(app);
         let _ = window.destroy();
     } else {
@@ -268,7 +218,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Aria2 JSON-RPC client — starts with default credentials, updated
     // after engine start via Aria2Client::update_credentials().
     let aria2_state = aria2::client::Aria2State(std::sync::Arc::new(
-        aria2::client::Aria2Client::new(16800, String::new()),
+        aria2::client::Aria2Client::new(DEFAULT_RPC_PORT, String::new()),
     ));
     app.manage(aria2_state);
 
@@ -284,6 +234,7 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     app.manage(services::notification::LinuxNotificationRegistry::new());
     app.manage(services::deep_link::PendingDeepLinkState::new());
+    app.manage(services::external_input::PendingExternalInputState::new());
     app.manage(services::frontend_action::PendingFrontendActionState::new());
 
     // App lifecycle — tracks cold-start vs runtime phase for autostart
@@ -377,34 +328,6 @@ fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             let urls: Vec<String> = event.urls().iter().map(ToString::to_string).collect();
             services::deep_link::route_external_inputs(&app_handle, urls, "macos-open-url");
         });
-    }
-
-    // Sync enabled deep-link schemes at startup on Linux.
-    //
-    // The .deb bundler installs `motrix-next.desktop` in /usr/share/applications/,
-    // but the deep-link plugin's `is_registered()` expects a runtime-created
-    // `motrix-next-handler.desktop` in ~/.local/share/applications/.  Without
-    // this call, `is_registered()` always returns false on .deb installs,
-    // causing protocol toggles to appear disabled (see issue #180).
-    //
-    // This must honor the user's saved protocol toggles. Calling
-    // `register_all()` would re-enable disabled schemes on every startup.
-    //
-    // On macOS and Windows this is compile-time excluded: those platforms use
-    // native registration APIs in commands/protocol.rs instead.
-    #[cfg(target_os = "linux")]
-    {
-        for preference in protocol_preferences_from_store(handle) {
-            if !preference.enabled {
-                continue;
-            }
-            if let Err(e) = app.deep_link().register(preference.scheme) {
-                log::warn!(
-                    "deep-link: register {} failed (non-fatal): {e}",
-                    preference.scheme
-                );
-            }
-        }
     }
 
     // The window-state plugin is registered with skip_initial_state("main"),
@@ -891,6 +814,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_system_config,
             commands::save_system_config,
+            commands::read_settings_backup_file,
+            commands::write_settings_backup_file,
             commands::start_engine_command,
             commands::stop_engine_command,
             commands::restart_engine_command,
@@ -910,6 +835,8 @@ pub fn run() {
             commands::start_upnp_mapping,
             commands::stop_upnp_mapping,
             commands::get_upnp_status,
+            commands::get_ed2k_bootstrap_status,
+            commands::sync_ed2k_bootstrap_files,
             commands::set_dock_visible,
             commands::minimize_to_tray,
             commands::probe_trackers,
@@ -932,14 +859,16 @@ pub fn run() {
             commands::is_default_protocol_client,
             commands::set_default_protocol_client,
             commands::remove_as_default_protocol_client,
-            commands::fetch_remote_bytes,
             commands::resolve_filename,
+            commands::fetch_remote_bytes,
             commands::get_system_proxy,
             commands::lookup_peer_ips,
             commands::refresh_runtime_config,
             commands::restart_http_api,
             commands::peek_pending_deep_links_silent,
+            commands::peek_pending_external_inputs_silent,
             commands::take_pending_deep_links,
+            commands::take_pending_external_inputs,
             commands::take_pending_frontend_actions,
             commands::history_add_record,
             commands::history_get_records,
@@ -1058,75 +987,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+    use super::AppLifecycleState;
 
     #[test]
-    fn protocol_preferences_default_to_supported_startup_values() {
-        assert_eq!(
-            protocol_preferences_from_value(None),
-            vec![
-                ProtocolPreference {
-                    scheme: "magnet",
-                    enabled: true,
-                },
-                ProtocolPreference {
-                    scheme: "ed2k",
-                    enabled: true,
-                },
-                ProtocolPreference {
-                    scheme: "thunder",
-                    enabled: false,
-                },
-                ProtocolPreference {
-                    scheme: "motrixnext",
-                    enabled: true,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn protocol_preferences_honor_saved_disabled_schemes() {
-        let preferences = json!({
-            "protocols": {
-                "magnet": false,
-                "ed2k": true,
-                "thunder": false,
-                "motrixnext": false
-            }
-        });
-
-        assert_eq!(
-            protocol_preferences_from_value(Some(&preferences)),
-            vec![
-                ProtocolPreference {
-                    scheme: "magnet",
-                    enabled: false,
-                },
-                ProtocolPreference {
-                    scheme: "ed2k",
-                    enabled: true,
-                },
-                ProtocolPreference {
-                    scheme: "thunder",
-                    enabled: false,
-                },
-                ProtocolPreference {
-                    scheme: "motrixnext",
-                    enabled: false,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn linux_startup_does_not_use_register_all() {
-        let src = include_str!("lib.rs");
-        let forbidden_call = ["deep_link().", "register_all()"].concat();
-        assert!(
-            !src.contains(&forbidden_call),
-            "Linux startup must honor saved protocol toggles instead of registering every scheme"
-        );
+    fn app_lifecycle_starts_cold() {
+        assert!(AppLifecycleState::new().is_cold_start());
     }
 }

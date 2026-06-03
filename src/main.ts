@@ -9,13 +9,28 @@ import { useTaskStore } from './stores/task'
 import { useAppStore } from './stores/app'
 import { useHistoryStore } from './stores/history'
 import aria2Api from './api/aria2'
-import { ENGINE_RPC_PORT, AUTO_SYNC_TRACKER_INTERVAL, DEFAULT_TRACKER_SOURCE } from '@shared/constants'
+import {
+  BT_LISTEN_PORT,
+  DEFAULT_TRACKER_SOURCE,
+  DHT_LISTEN_PORT,
+  ENGINE_RPC_PORT,
+  PROXY_SCOPES,
+} from '@shared/constants'
 import { convertTrackerDataToLine, convertTrackerDataToComma, reduceTrackerString } from '@shared/utils/tracker'
 import { logger } from '@shared/logger'
+import { getErrorMessage } from '@shared/utils/errorMessage'
+import { resolveUserVisibleDownloadDir, shouldPersistResolvedDownloadDir } from '@shared/utils/userVisibleDirectory'
+import { getUpdateProxy } from '@/composables/useUpdateFlow'
+import { resolveAppProxyUrl } from '@shared/utils/appProxyPolicy'
+import { checkSyncDue } from '@shared/utils/syncSchedule'
 import type { AppConfig, TauriUpdate } from '@shared/types'
 import App from './App.vue'
 import 'virtual:uno.css'
-import './styles/variables.css'
+import './styles/tokens.css'
+import './styles/base.css'
+import './styles/transitions.css'
+import './styles/preferences.css'
+import './styles/naive-overrides.css'
 
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { getLocale } from 'tauri-plugin-locale-api'
@@ -27,24 +42,25 @@ app.use(pinia)
 app.use(router)
 app.use(i18n)
 
-// ── Production guard: suppress browser default context menu ─────────
-// In dev mode, keep the context menu for DevTools / Inspect Element.
-// Industry standard for Tauri/Electron desktop apps (Discord, Slack, VS Code).
-if (import.meta.env.PROD) {
-  document.addEventListener('contextmenu', (e) => e.preventDefault())
-}
-
-app.mount('#app')
-
 // ── Global error boundary — catch all uncaught exceptions to log file ──
-// Registered after mount (UI renders first) but before init block (covers
-// all async code paths: deep-link, clipboard, engine, tracker sync).
+// Register before preference hydration so startup failures do not disappear
+// before Vue mounts and the app-level handler becomes active.
 window.addEventListener('error', (e) => {
   logger.error('GlobalError', e.error ?? e.message)
 })
 window.addEventListener('unhandledrejection', (e) => {
   logger.error('UnhandledRejection', e.reason)
 })
+app.config.errorHandler = (err) => {
+  logger.error('VueError', err)
+}
+
+// ── Production guard: suppress browser default context menu ─────────
+// In dev mode, keep the context menu for DevTools / Inspect Element.
+// Industry standard for Tauri/Electron desktop apps (Discord, Slack, VS Code).
+if (import.meta.env.PROD) {
+  document.addEventListener('contextmenu', (e) => e.preventDefault())
+}
 
 // ── Main window initialization ──────────────────────────────────────
 
@@ -54,7 +70,7 @@ window.addEventListener('unhandledrejection', (e) => {
   const appStore = useAppStore()
   const historyStore = useHistoryStore()
 
-  /** Rust-side health check: probes aria2c HTTP RPC with retries.
+  /** Rust-side health check: probes Aria2 Next HTTP RPC with retries.
    *  Also updates Aria2Client credentials so invoke() commands work. */
   async function waitForEngine(): Promise<boolean> {
     const { invoke } = await import('@tauri-apps/api/core')
@@ -80,9 +96,7 @@ window.addEventListener('unhandledrejection', (e) => {
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       const channel = config.updateChannel || 'stable'
-      const proxy = config.proxy
-      const proxyServer =
-        proxy?.enable && proxy.server && (proxy.scope || []).includes('update-app') ? proxy.server : null
+      const proxyServer = getUpdateProxy(config.proxy)
       const update = await invoke<TauriUpdate | null>('check_for_update', { channel, proxy: proxyServer })
       if (update) {
         appStore.pendingUpdate = update
@@ -93,12 +107,23 @@ window.addEventListener('unhandledrejection', (e) => {
     }
   }
 
-  async function autoSyncTrackerOnStartup() {
-    const config = preferenceStore.config
-    if (!config.autoSyncTracker) return
+  function emitAppToast(payload: { type: 'success' | 'info' | 'warning' | 'error'; key: string }): void {
+    window.dispatchEvent(new CustomEvent('app:toast', { detail: payload }))
+  }
 
-    const lastSync = config.lastSyncTrackerTime || 0
-    if (Date.now() - lastSync < AUTO_SYNC_TRACKER_INTERVAL) return
+  async function syncBtTrackersIfDue(startup: boolean) {
+    const config = preferenceStore.config
+    if (
+      !checkSyncDue({
+        enabled: !!config.btTrackerAutoSync,
+        intervalHours: Number(config.btTrackerSyncIntervalHours),
+        lastSyncTime: Number(config.lastSyncTrackerTime),
+        now: Date.now(),
+        startup,
+      })
+    ) {
+      return
+    }
 
     const sources = config.trackerSource?.length ? config.trackerSource : DEFAULT_TRACKER_SOURCE
     try {
@@ -109,16 +134,57 @@ window.addEventListener('unhandledrejection', (e) => {
       const comma = convertTrackerDataToComma(result.data)
       await preferenceStore.updateAndSave({
         btTracker: comma,
-        trackerSource: sources,
         lastSyncTrackerTime: Date.now(),
       })
 
       const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('save_system_config', { config: { 'bt-tracker': reduceTrackerString(comma) } })
+      const reduced = reduceTrackerString(comma)
+      await invoke('save_system_config', { config: { 'bt-tracker': reduced } })
+      if (appStore.engineReady) {
+        await aria2Api.changeGlobalOption({ 'bt-tracker': reduced } as Partial<AppConfig>)
+      }
       logger.info('Tracker', `Auto-synced: ${result.data.length}/${sources.length} source(s) succeeded`)
+      emitAppToast({ type: 'success', key: 'preferences.bt-tracker-sync-succeed' })
     } catch (e) {
       logger.debug('Tracker', 'auto-sync failed: ' + (e as Error).message)
     }
+  }
+
+  async function syncEd2kBootstrapIfDue(startup: boolean) {
+    const config = preferenceStore.config
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const status = await invoke<{ serverMetModified: number | null; nodesDatModified: number | null }>(
+        'get_ed2k_bootstrap_status',
+      )
+      const lastSync = Math.max(status.serverMetModified ?? 0, status.nodesDatModified ?? 0)
+      if (
+        !checkSyncDue({
+          enabled: !!config.ed2kBootstrapAutoSync,
+          intervalHours: Number(config.ed2kBootstrapSyncIntervalHours),
+          lastSyncTime: lastSync,
+          now: Date.now(),
+          startup,
+        })
+      ) {
+        return
+      }
+
+      await invoke('sync_ed2k_bootstrap_files', {
+        serverMetUrl: config.ed2kServerMetUrl,
+        nodesDatUrl: config.ed2kNodesDatUrl,
+        proxy: resolveAppProxyUrl(config.proxy, PROXY_SCOPES.UPDATE_TRACKERS) ?? undefined,
+      })
+      logger.info('ED2K', 'Bootstrap files auto-synced')
+      emitAppToast({ type: 'success', key: 'preferences.ed2k-bootstrap-sync-succeed' })
+    } catch (e) {
+      logger.debug('ED2K.bootstrapAutoSync', e)
+    }
+  }
+
+  function syncNetworkSourcesIfDue(startup: boolean) {
+    void syncBtTrackersIfDue(startup)
+    void syncEd2kBootstrapIfDue(startup)
   }
 
   // ---------------------------------------------------------------------------
@@ -141,32 +207,32 @@ window.addEventListener('unhandledrejection', (e) => {
     try {
       const { invoke } = await import('@tauri-apps/api/core')
 
-      // Resolve OS-specific Downloads directory as fallback when config.dir
-      // is empty. Without this, aria2 receives no --dir arg and defaults to
-      // CWD, which is read-only on macOS .app bundles (errorCode=16).
-      //
-      // Three-tier fallback:
-      //   1. downloadDir()            — ~/Downloads (via Tauri path API)
-      //   2. homeDir() + '/Downloads' — manual construction
-      //   3. homeDir()                — last resort (home dir always exists)
+      // Resolve a user-visible writable directory before aria2 starts.
       let defaultDir = ''
-      if (!config.dir) {
-        const { downloadDir, homeDir } = await import('@tauri-apps/api/path')
+      let configuredDirIsHome = false
+      if (config.dir) {
         try {
-          defaultDir = await downloadDir()
+          const { homeDir } = await import('@tauri-apps/api/path')
+          const home = (await homeDir()).replace(/\\/g, '/').replace(/\/+$/, '')
+          const configured = config.dir.replace(/\\/g, '/').replace(/\/+$/, '')
+          configuredDirIsHome = !!home && configured === home
         } catch (e) {
-          logger.warn('Engine', `downloadDir() unavailable, falling back to homeDir: ${e}`)
-          try {
-            defaultDir = (await homeDir()) + '/Downloads'
-          } catch (e) {
-            logger.warn('Engine', `homeDir() unavailable, dir fallback exhausted: ${e}`)
-          }
+          logger.debug('Engine.defaultDirHomeCheck', e)
         }
-        // Persist the resolved dir so future launches skip the fallback chain
+      }
+
+      if (!config.dir || configuredDirIsHome) {
+        const resolvedDir = await resolveUserVisibleDownloadDir()
+        defaultDir = resolvedDir.path
         if (defaultDir) {
           config.dir = defaultDir
-          preferenceStore.updateAndSave({ dir: defaultDir })
-          logger.info('Engine', `resolved default download dir: ${defaultDir}`)
+          if (shouldPersistResolvedDownloadDir(resolvedDir)) {
+            preferenceStore.updateAndSave({ dir: defaultDir })
+          }
+          logger.info(
+            'Engine',
+            `resolved default download dir source=${resolvedDir.source} fallback=${resolvedDir.usedFallback}`,
+          )
         }
       }
 
@@ -175,23 +241,11 @@ window.addEventListener('unhandledrejection', (e) => {
       // --user-agent, etc. even before the user opens the preference page.
       // On subsequent launches, saved values from Downloads/BT/Network/Advanced
       // preferences already exist in system.json and will be merged (not overwritten).
-      const { buildDownloadsSystemConfig, buildDownloadsForm } = await import('@/composables/useDownloadsPreference')
-      const { buildBtSystemConfig, buildBtForm } = await import('@/composables/useBtPreference')
-      const { buildNetworkSystemConfig, buildNetworkForm } = await import('@/composables/useNetworkPreference')
-      const { buildAdvancedSystemConfig, buildAdvancedForm } = await import('@/composables/useAdvancedPreference')
-
-      const downloadsSystem = buildDownloadsSystemConfig(buildDownloadsForm(config, defaultDir))
-      const btSystem = buildBtSystemConfig(buildBtForm(config))
-      const networkSystem = buildNetworkSystemConfig(buildNetworkForm(config))
-      const { form: advForm } = buildAdvancedForm(config)
-      const advancedSystem = buildAdvancedSystemConfig(advForm)
+      const { buildSystemConfigFromAppConfig } = await import('@shared/utils/systemConfig')
 
       await invoke('save_system_config', {
         config: {
-          ...downloadsSystem,
-          ...btSystem,
-          ...networkSystem,
-          ...advancedSystem,
+          ...buildSystemConfigFromAppConfig(config, defaultDir),
           // Override with runtime values — secret may have been auto-generated
           'rpc-secret': secret,
           'rpc-listen-port': String(port),
@@ -249,55 +303,10 @@ window.addEventListener('unhandledrejection', (e) => {
     }
   }
 
-  /**
-   * Cross-platform protocol handler sync.
-   *
-   * For each enabled protocol, queries the OS via `is_default_protocol_client`
-   * (macOS: NSWorkspace, Windows: win_registry, Linux: deep-link plugin).
-   *
-   * If an enabled protocol is not handled by this app:
-   *  1. Sends an OS-level notification (visible even if window is hidden)
-   *  2. Signals appStore.pendingProtocolHijack for the UI dialog
-   *
-   * Does NOT auto-disable config toggles — the user decides in Settings.
-   */
-  async function syncProtocolHandlers(config: typeof preferenceStore.config): Promise<void> {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      const hijacked: string[] = []
-
-      for (const [protocol, enabled] of Object.entries(config.protocols)) {
-        if (!enabled) continue
-        try {
-          const isDefault = await invoke<boolean>('is_default_protocol_client', { protocol })
-          if (!isDefault) {
-            logger.info('ProtocolSync', `${protocol} is not the default handler`)
-            hijacked.push(protocol)
-          }
-        } catch (e) {
-          // Per-protocol errors must not block other protocols
-          logger.debug('ProtocolSync', `${protocol}: ${(e as Error).message}`)
-        }
-      }
-
-      if (hijacked.length === 0) return
-
-      // 1. OS-level notification
-      await invoke('send_app_system_notification', {
-        title: i18n.global.t('app.protocol-hijacked-title'),
-        body: i18n.global.t('app.protocol-hijacked-body', { protocols: hijacked.join(', ') }),
-      })
-
-      // 2. Signal UI to show dialog (consumed by MainLayout/useAppEvents)
-      //    Does NOT modify config — user keeps control of their toggles.
-      appStore.pendingProtocolHijack = hijacked
-    } catch (e) {
-      logger.debug('ProtocolSync', e)
-    }
-  }
-
-  preferenceStore.loadPreference().then(async () => {
+  async function bootstrapMainWindow(): Promise<void> {
     // ── Phase 1: critical path → window visible ASAP ──────────────────────
+    await preferenceStore.loadPreference()
+
     const storedLocale = preferenceStore.locale
     let resolvedLocale: string
 
@@ -335,29 +344,17 @@ window.addEventListener('unhandledrejection', (e) => {
     // loadPreference() buffers these signals to avoid showing English toasts.
     preferenceStore.flushMigrationSignals()
 
+    // Mount only after preference + locale hydration so root-level theme,
+    // color-scheme, locale, and layout watchers see stable persisted values
+    // on their first run. The native window is still hidden until
+    // MainLayout.onMounted explicitly shows it.
+    app.mount('#app')
+
     const config = preferenceStore.config
 
     // ── Phase 2: engine startup (non-blocking) ────────────────────────────
     const port = config.rpcListenPort || ENGINE_RPC_PORT
-    // Distinguish "never set" (undefined/null → auto-generate) from
-    // "intentionally cleared" ('' → respect user choice).
-    let secret = config.rpcSecret
-
-    if (secret == null) {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-      const values = crypto.getRandomValues(new Uint8Array(16))
-      secret = Array.from(values, (v) => chars[v % chars.length]).join('')
-      await preferenceStore.updateAndSave({ rpcSecret: secret })
-    }
-
-    // Auto-generate extensionApiSecret on first launch (independent from rpcSecret).
-    // Distinction: undefined/null = never set → generate. '' = user intentionally cleared → respect.
-    if (config.extensionApiSecret == null) {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-      const values = crypto.getRandomValues(new Uint8Array(16))
-      const apiSecret = Array.from(values, (v) => chars[v % chars.length]).join('')
-      await preferenceStore.updateAndSave({ extensionApiSecret: apiSecret })
-    }
+    const secret = config.rpcSecret
 
     taskStore.setApi(aria2Api)
 
@@ -365,26 +362,27 @@ window.addEventListener('unhandledrejection', (e) => {
     // appStore.engineRestarting drives the engine banner in MainLayout.
     const enginePromise = initEngine(port, secret, config)
 
-    // ── Phase 3: non-critical IPC (parallel) ──────────────────────────────
+    // ── Phase 3: non-critical IPC ────────────────────────────────────────
     //
     // External input routing is owned by Rust and consumed from
     // `take_pending_deep_links` after MainLayout registers listeners. Do not
     // call tauri-plugin-deep-link `getCurrent()` here: that value is
     // process-level plugin state, so lightweight-mode WebView recreation would
     // replay stale torrent/protocol inputs.
-    Promise.allSettled([syncAutostart(config), syncProtocolHandlers(config)])
+    Promise.allSettled([syncAutostart(config)])
 
     // Start UPnP port mapping if enabled (fire-and-forget)
     if (config.enableUpnp) {
       import('@tauri-apps/api/core')
         .then(({ invoke }) =>
           invoke('start_upnp_mapping', {
-            btPort: Number(config.listenPort) || 21301,
-            dhtPort: Number(config.dhtListenPort) || 26701,
+            btPort: Number(config.listenPort) || BT_LISTEN_PORT,
+            dhtPort: Number(config.dhtListenPort) || DHT_LISTEN_PORT,
             ed2kPort: Number(config.ed2kListenPort) > 0 ? Number(config.ed2kListenPort) : null,
+            ed2kUdpPort: Number(config.ed2kUdpListenPort) > 0 ? Number(config.ed2kUdpListenPort) : null,
           }),
         )
-        .catch((e) => logger.warn('UPnP', 'startup mapping failed: ' + e))
+        .catch((e) => logger.warn('UPnP', `startup mapping failed: ${getErrorMessage(e)}`))
     }
 
     // ── Phase 2 completion: engine ready ───────────────────────────────────
@@ -415,9 +413,9 @@ window.addEventListener('unhandledrejection', (e) => {
 
     // ── Phase 4: deferred non-critical tasks ───────────────────────────────
     autoCheckForUpdate()
-    autoSyncTrackerOnStartup()
+    syncNetworkSourcesIfDue(true)
 
-    // Initialize download history database, then schedule stale record cleanup
+    // Initialize download history database, then schedule lightweight cleanup.
     historyStore
       .init({
         onCorrupt: () => logger.warn('HistoryDB', 'Database corrupted, rebuilding…'),
@@ -426,40 +424,31 @@ window.addEventListener('unhandledrejection', (e) => {
         onRebuildFailed: (e) => logger.error('HistoryDB', `Rebuild failed: ${e}`),
       })
       .then(() => {
-        // Auto-delete stale records if enabled — delayed to avoid startup contention
-        if (preferenceStore.config?.autoDeleteStaleRecords) {
-          const runCleanup = async () => {
-            try {
-              const { runStaleRecordCleanup } = await import('./composables/useStaleCleanup')
-              const { extractHistoryFilePaths } = await import('./composables/useTaskLifecycle')
-              const records = await historyStore.getRecords('complete')
-              const result = await runStaleRecordCleanup(
-                records.map((r) => ({
-                  gid: r.gid,
-                  name: r.name,
-                  dir: r.dir ?? '',
-                  filePaths: extractHistoryFilePaths(r),
-                })),
-                historyStore.removeStaleRecords,
-              )
-              if (result.removed > 0) {
-                logger.info('StaleCleanup', `Removed ${result.removed}/${result.scanned} stale records`)
-              }
-            } catch (e) {
-              logger.debug('StaleCleanup', e)
-            }
+        const runCleanup = async () => {
+          try {
+            const { runHistoryMaintenance } = await import('./composables/useStaleCleanup')
+            const { extractHistoryFilePaths } = await import('./composables/useTaskLifecycle')
+            await runHistoryMaintenance({
+              autoDeleteStaleRecords: !!preferenceStore.config?.autoDeleteStaleRecords,
+              completedRecordRetentionDays: Number(preferenceStore.config?.completedRecordRetentionDays ?? 0),
+              getRecords: historyStore.getRecords,
+              removeStaleRecords: historyStore.removeStaleRecords,
+              removeHistoryRecords: historyStore.removeStaleRecords,
+              removeTaskRecord: aria2Api.removeTaskRecord,
+              extractFilePaths: extractHistoryFilePaths,
+            })
+          } catch (e) {
+            logger.debug('HistoryMaintenance', e)
           }
-          // First scan 30s after startup — not urgent
-          setTimeout(runCleanup, 30_000)
-          // Re-scan every 30 minutes for long-running sessions
-          setInterval(runCleanup, 1_800_000)
         }
+        // First scan 30s after startup — not urgent.
+        setTimeout(runCleanup, 30_000)
+        // Re-scan every 30 minutes for long-running sessions.
+        setInterval(runCleanup, 1_800_000)
       })
       .catch((e) => logger.warn('HistoryDB', 'init failed: ' + e))
 
-    // Re-check tracker sync hourly for long-running sessions.
-    // autoSyncTrackerOnStartup() internally de-duplicates via lastSyncTrackerTime.
-    setInterval(autoSyncTrackerOnStartup, 3_600_000)
+    setInterval(() => syncNetworkSourcesIfDue(false), 3_600_000)
 
     // Warm up Tauri FS plugin IPC channel to eliminate cold-start delay on first
     // file operation (e.g. task deletion).
@@ -519,5 +508,10 @@ window.addEventListener('unhandledrejection', (e) => {
         logger.debug('Main.clipboardMonitor', e)
       }
     })
+  }
+
+  void bootstrapMainWindow().catch((e) => {
+    logger.error('main.bootstrap', e)
+    appStore.setEngineRestarting(false)
   })
 } // end: main window initialization

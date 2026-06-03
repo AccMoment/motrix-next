@@ -1,8 +1,8 @@
 /**
  * @fileoverview Pure functions for the BitTorrent preference tab.
  *
- * Manages BT-specific config: auto-download content, encryption, seeding,
- * max peers, and tracker management. Key business logic:
+ * Manages BT-specific config: auto-download content, encryption,
+ * discovery, max peers, and tracker management. Key business logic:
  * - btAutoDownloadContent ↔ pauseMetadata
  * - Tracker comma ↔ newline format conversion
  *
@@ -37,14 +37,15 @@ export interface BtForm {
   [key: string]: unknown
   btAutoDownloadContent: boolean
   btForceEncryption: boolean
-  keepSeeding: boolean
-  seedRatio: number
-  seedTime: number
+  btDhtEnabled: boolean
+  btPeerExchangeEnabled: boolean
+  btLocalPeerDiscoveryEnabled: boolean
   btMaxPeers: number
   trackerSource: string[]
   customTrackerUrls: string[]
   btTracker: string
-  autoSyncTracker: boolean
+  btTrackerAutoSync: boolean
+  btTrackerSyncIntervalHours: number
   lastSyncTrackerTime: number
 }
 
@@ -61,14 +62,15 @@ export function buildBtForm(config: AppConfig): BtForm {
   return {
     btAutoDownloadContent,
     btForceEncryption: config.btForceEncryption ?? D.btForceEncryption,
-    keepSeeding: config.keepSeeding ?? D.keepSeeding,
-    seedRatio: config.seedRatio ?? D.seedRatio,
-    seedTime: config.seedTime ?? D.seedTime,
+    btDhtEnabled: config.btDhtEnabled ?? D.btDhtEnabled,
+    btPeerExchangeEnabled: config.btPeerExchangeEnabled ?? D.btPeerExchangeEnabled,
+    btLocalPeerDiscoveryEnabled: config.btLocalPeerDiscoveryEnabled ?? D.btLocalPeerDiscoveryEnabled,
     btMaxPeers: config.btMaxPeers ?? D.btMaxPeers,
     trackerSource: config.trackerSource ?? [...D.trackerSource],
     customTrackerUrls: config.customTrackerUrls ?? [...D.customTrackerUrls],
     btTracker: convertCommaToLine(config.btTracker ?? D.btTracker),
-    autoSyncTracker: config.autoSyncTracker ?? D.autoSyncTracker,
+    btTrackerAutoSync: config.btTrackerAutoSync ?? D.btTrackerAutoSync,
+    btTrackerSyncIntervalHours: Number(config.btTrackerSyncIntervalHours ?? D.btTrackerSyncIntervalHours),
     lastSyncTrackerTime: config.lastSyncTrackerTime ?? D.lastSyncTrackerTime,
   }
 }
@@ -86,9 +88,10 @@ export function buildBtSystemConfig(f: BtForm): Record<string, string> {
   return {
     'bt-max-peers': String(f.btMaxPeers),
     'bt-force-encryption': String(!!f.btForceEncryption),
-    'seed-ratio': String(f.seedRatio),
-    'seed-time': String(f.seedTime),
-    'keep-seeding': String(!!f.keepSeeding),
+    'bt-require-crypto': String(!!f.btForceEncryption),
+    'enable-dht': String(!!f.btDhtEnabled),
+    'enable-peer-exchange': String(!!f.btPeerExchangeEnabled),
+    'bt-enable-lpd': String(!!f.btLocalPeerDiscoveryEnabled),
     'pause-metadata': String(!autoContent),
     'bt-tracker': convertLineToComma(f.btTracker),
   }

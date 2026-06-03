@@ -2,7 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePreferenceStore } from '../preference'
-import { CURRENT_DB_SCHEMA_VERSION } from '@shared/constants'
+import { CURRENT_DB_SCHEMA_VERSION, DEFAULT_APP_CONFIG } from '@shared/constants'
+import { CONFIG_VERSION } from '@shared/utils/configMigration'
 import type { AppConfig } from '@shared/types'
 
 // Mock @tauri-apps/plugin-store — returns an in-memory store
@@ -41,6 +42,23 @@ describe('PreferenceStore', () => {
     expect(mockStoreData.get('preferences')).toBeDefined()
   })
 
+  it('replaceAndSave replaces config instead of merging with current state', async () => {
+    await store.updateAndSave({ theme: 'dark', locale: 'zh-CN' })
+    await store.replaceAndSave({
+      configVersion: CONFIG_VERSION,
+      theme: 'light',
+      rpcSecret: 'replacement-rpc',
+      extensionApiSecret: 'replacement-api',
+    })
+
+    const saved = mockStoreData.get('preferences') as AppConfig
+    expect(store.config.theme).toBe('light')
+    expect(store.config.locale).toBe(DEFAULT_APP_CONFIG.locale)
+    expect(store.config.rpcSecret).toBe('replacement-rpc')
+    expect(store.config.extensionApiSecret).toBe('replacement-api')
+    expect(saved.locale).toBe(DEFAULT_APP_CONFIG.locale)
+  })
+
   it('persists the current DB schema version on first save', async () => {
     await store.updateAndSave({ locale: 'zh-CN' })
 
@@ -61,6 +79,49 @@ describe('PreferenceStore', () => {
     await store.loadPreference()
     expect(store.config.theme).toBe('auto')
     expect(store.config.locale).toBe('auto')
+  })
+
+  it('loadPreference creates and persists secrets on first launch', async () => {
+    await store.loadPreference()
+
+    const saved = mockStoreData.get('preferences') as AppConfig
+    expect(store.config.rpcSecret).toHaveLength(16)
+    expect(store.config.extensionApiSecret).toHaveLength(16)
+    expect(saved.rpcSecret).toBe(store.config.rpcSecret)
+    expect(saved.extensionApiSecret).toBe(store.config.extensionApiSecret)
+  })
+
+  it('loadPreference hydrates missing nested config fields', async () => {
+    mockStoreData.set('preferences', {
+      configVersion: CONFIG_VERSION,
+      clipboard: { enable: false },
+      proxy: { mode: 'manual', server: 'http://127.0.0.1:7890' },
+    })
+
+    await store.loadPreference()
+
+    expect(store.config.clipboard).toEqual({ ...DEFAULT_APP_CONFIG.clipboard, enable: false })
+    expect(store.config.proxy).toEqual({
+      ...DEFAULT_APP_CONFIG.proxy,
+      mode: 'manual',
+      server: 'http://127.0.0.1:7890',
+    })
+  })
+
+  it('loadPreference persists repaired invalid config once', async () => {
+    mockStoreData.set('preferences', {
+      configVersion: CONFIG_VERSION,
+      theme: 'bad-theme',
+      updateChannel: 'nightly',
+    })
+
+    await store.loadPreference()
+
+    const saved = mockStoreData.get('preferences') as AppConfig
+    expect(store.config.theme).toBe(DEFAULT_APP_CONFIG.theme)
+    expect(store.config.updateChannel).toBe(DEFAULT_APP_CONFIG.updateChannel)
+    expect(saved.theme).toBe(DEFAULT_APP_CONFIG.theme)
+    expect(saved.updateChannel).toBe(DEFAULT_APP_CONFIG.updateChannel)
   })
 
   // ─── computed: theme / locale / direction ───────────────

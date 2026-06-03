@@ -6,7 +6,7 @@
  * - Parse aria2 file list into UI-friendly selection items
  * - Build the select-file option string
  */
-import type { Aria2File, Aria2EngineOptions } from '@shared/types'
+import type { Aria2File, Aria2EngineOptions, Aria2Task } from '@shared/types'
 
 /** Check if a URI is a magnet link. */
 export function isMagnetUri(uri: string): boolean {
@@ -65,6 +65,32 @@ export function shouldShowFileSelection(config: { pauseMetadata?: boolean | stri
   return config.pauseMetadata !== false && config.pauseMetadata !== 'false'
 }
 
+export function getPendingMagnetSelectionGids(tasks: Aria2Task[]): string[] {
+  return tasks
+    .map((task) => {
+      if (!task.bittorrent || task.status !== 'paused') return false
+      if (!task.bittorrent.info?.name) return false
+      if (!task.following) return false
+      if (!task.files.some((file) => Number(file.length) > 0)) return false
+      return task.following
+    })
+    .filter((gid): gid is string => typeof gid === 'string' && gid.length > 0)
+}
+
+export interface MagnetSelectionResolution {
+  metadataGid: string
+  downloadGid: string
+}
+
+export function getResolvedMagnetSelection(task: Aria2Task): MagnetSelectionResolution | null {
+  const downloadGid = task.followedBy?.find((gid) => gid.trim().length > 0)
+  if (!downloadGid) return null
+  return {
+    metadataGid: task.gid,
+    downloadGid,
+  }
+}
+
 /** Actions needed to apply file selection to a download based on its current status. */
 export interface ConfirmAction {
   /** Whether the task must be resumed after applying options. */
@@ -76,7 +102,7 @@ export interface ConfirmAction {
  * to a magnet download based on its current aria2 task status.
  *
  * - paused:   standard case with pause-metadata=true — just resume
- * - waiting:  queued task — just resume
+ * - waiting:  queued task — already eligible to start when a slot opens
  * - active:   engine failed to honor pause-metadata — do not race pause/unpause
  * - complete/removed/error: terminal states — no action needed
  * - undefined: safe fallback — treat as resumable
@@ -84,9 +110,9 @@ export interface ConfirmAction {
 export function buildStatusAwareConfirmAction(status: string | undefined): ConfirmAction {
   switch (status) {
     case 'paused':
-    case 'waiting':
     case undefined:
       return { needsResume: true }
+    case 'waiting':
     case 'active':
     case 'complete':
     case 'removed':

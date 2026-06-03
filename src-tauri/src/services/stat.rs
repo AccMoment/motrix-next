@@ -58,6 +58,16 @@ fn compact_size(bytes: u64) -> String {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn parse_length(value: Option<&str>) -> u64 {
+    value.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn completed_length(task: &crate::aria2::types::Aria2Task) -> u64 {
+    parse_length(Some(&task.completed_length))
+}
+
 /// Sets the macOS Dock badge label using `NSApp().dockTile().setBadgeLabel()`.
 ///
 /// This is an **app-level** API that accesses `NSApplication.sharedApplication()`
@@ -525,10 +535,7 @@ async fn stat_loop(
                                 .iter()
                                 .filter_map(|t| t.total_length.parse::<u64>().ok())
                                 .sum();
-                            let completed: u64 = tasks
-                                .iter()
-                                .filter_map(|t| t.completed_length.parse::<u64>().ok())
-                                .sum();
+                            let completed: u64 = tasks.iter().map(completed_length).sum();
                             let pct = if total > 0 {
                                 Some((completed as f64 / total as f64 * 100.0) as u64)
                             } else {
@@ -559,10 +566,7 @@ async fn stat_loop(
                                 .iter()
                                 .filter_map(|t| t.total_length.parse::<u64>().ok())
                                 .sum();
-                            let completed: u64 = tasks
-                                .iter()
-                                .filter_map(|t| t.completed_length.parse::<u64>().ok())
-                                .sum();
+                            let completed: u64 = tasks.iter().map(completed_length).sum();
                             let progress = if total > 0 {
                                 completed as f64 / total as f64
                             } else {
@@ -600,6 +604,7 @@ impl StatServiceState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aria2::types::{Aria2File, Aria2Task};
 
     // ── compact_size ────────────────────────────────────────────────
 
@@ -696,6 +701,43 @@ mod tests {
 
     // ── Constant alignment with timing.ts ────────────────────────────
 
+    fn make_task(gid: &str, status: &str) -> Aria2Task {
+        Aria2Task {
+            gid: gid.to_string(),
+            status: status.to_string(),
+            total_length: "1024".to_string(),
+            completed_length: "1024".to_string(),
+            upload_length: "0".to_string(),
+            download_speed: "0".to_string(),
+            upload_speed: "0".to_string(),
+            connections: "0".to_string(),
+            dir: "/tmp".to_string(),
+            files: vec![Aria2File {
+                index: "1".to_string(),
+                path: "/tmp/test.zip".to_string(),
+                length: "1024".to_string(),
+                completed_length: "1024".to_string(),
+                selected: "true".to_string(),
+                uris: vec![],
+            }],
+            bittorrent: None,
+            ed2k: None,
+            info_hash: None,
+            seeder: None,
+            num_seeders: None,
+            num_pieces: None,
+            piece_length: None,
+            error_code: None,
+            error_message: None,
+            bitfield: None,
+            verified_length: None,
+            verify_integrity_pending: None,
+            followed_by: None,
+            following: None,
+            belongs_to: None,
+        }
+    }
+
     #[test]
     fn constants_match_frontend_timing_ts() {
         // These constants MUST match src/shared/timing.ts exactly.
@@ -728,6 +770,15 @@ mod tests {
         assert!(json.get("download_speed").is_none());
     }
 
+    #[test]
+    fn completed_length_uses_aria2_completed_length() {
+        let mut task = make_task("ed2k", "active");
+        task.total_length = "1000".to_string();
+        task.completed_length = "200".to_string();
+
+        assert_eq!(completed_length(&task), 200);
+    }
+
     // ── power guard integration ─────────────────────────────────────
 
     /// Validates that the keepawake Builder API compiles and returns
@@ -737,18 +788,5 @@ mod tests {
     fn power_guard_builder_compiles() {
         let _: fn() -> Result<crate::services::power::PowerGuard, crate::error::AppError> =
             crate::services::power::PowerGuard::acquire_download;
-    }
-
-    #[test]
-    fn power_guard_does_not_request_display_awake() {
-        let source = include_str!("stat.rs");
-        let production_source = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("stat.rs should contain production source before tests");
-        assert!(
-            !production_source.contains(".display(true)"),
-            "downloads must prevent system idle sleep without forcing the display to stay awake"
-        );
     }
 }

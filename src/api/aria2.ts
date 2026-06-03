@@ -2,7 +2,7 @@
  * @fileoverview Aria2 API — invoke() transport layer.
  *
  * All aria2 RPC calls go through Tauri invoke() to the Rust backend.
- * The Rust Aria2Client handles HTTP JSON-RPC communication with aria2c.
+ * The Rust Aria2Client handles HTTP JSON-RPC communication with Aria2 Next.
  */
 import { invoke } from '@tauri-apps/api/core'
 import { changeKeysToCamelCase, formatOptionsForEngine } from '@shared/utils'
@@ -16,10 +16,11 @@ import type {
   Ed2kSearchOptions,
   Ed2kSearchResults,
 } from '@shared/types'
-import { logger } from '@shared/logger'
+import { formatLogFields, logger } from '@shared/logger'
 import { resolveDownloadDir } from '@shared/utils/fileCategory'
 import { sanitizeAria2OutHint } from '@shared/utils/batchHelpers'
 import { decodeThunderLink } from '@shared/utils/resource'
+import { summarizeAria2Options, summarizeExternalInput } from '@shared/utils/externalInputDiagnostics'
 
 /**
  * Engine readiness state.
@@ -45,6 +46,14 @@ function normalizeUriForEngine(uri: string): string {
     throw new Error('Invalid Thunder link')
   }
   return decoded
+}
+
+function withBtSafetyOptions(options: Aria2EngineOptions): Aria2EngineOptions {
+  return {
+    ...options,
+    'check-integrity': options['check-integrity'] ?? 'true',
+    'force-save': options['force-save'] ?? 'true',
+  }
 }
 
 /** Retrieves aria2 engine version and list of enabled features. */
@@ -141,7 +150,15 @@ export async function addUri(params: {
   })
 
   const gids = await Promise.all(tasks)
-  logger.info('aria2.addUri', `added ${gids.length} URI task(s) gids=[${gids.join(',')}]`)
+  logger.info(
+    'aria2.addUri',
+    formatLogFields({
+      added: gids.length,
+      gids: `[${gids.join(',')}]`,
+      first: normalizedUris[0] ? summarizeExternalInput(normalizedUris[0]) : 'none',
+      ...summarizeAria2Options(engineOptions),
+    }),
+  )
   return gids
 }
 
@@ -159,7 +176,7 @@ export async function addUriAtomic(params: { uris: string[]; options: Record<str
 
 /** Adds a torrent download from a base64-encoded .torrent file. */
 export async function addTorrent(params: { torrent: string; options: Aria2EngineOptions }): Promise<string> {
-  const engineOptions = formatOptionsForEngine(params.options)
+  const engineOptions = formatOptionsForEngine(withBtSafetyOptions(params.options))
   const gid = await invoke<string>('aria2_add_torrent', { torrent: params.torrent, options: engineOptions })
   logger.info('aria2.addTorrent', `gid=${gid}`)
   return gid

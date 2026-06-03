@@ -1,5 +1,5 @@
 /** @fileoverview Application-wide constants: themes, intervals, suffixes, limits. */
-import { DEFAULT_TASK_SORT } from '@/composables/useTaskSort'
+import { DEFAULT_TASK_MANUAL_ORDER, DEFAULT_TASK_SORT } from '@/composables/useTaskSort'
 export const EMPTY_STRING = ''
 export const IS_PORTABLE = false
 
@@ -61,16 +61,26 @@ export const TASK_STATUS = {
   ERROR: 'error',
   COMPLETE: 'complete',
   REMOVED: 'removed',
-  SEEDING: 'seeding',
+  SHARING: 'sharing',
 }
 
-export const LOG_LEVELS = ['error', 'warn', 'info', 'debug']
+export const APP_LOG_LEVELS = ['error', 'warn', 'info', 'debug'] as const
+export const ARIA2_LOG_LEVELS = ['error', 'warn', 'notice', 'info', 'debug'] as const
 
 export const MAX_NUM_OF_DIRECTORIES = 5
 
 export const ENGINE_RPC_HOST = '127.0.0.1'
-export const ENGINE_RPC_PORT = 16800
-export const ENGINE_MAX_CONCURRENT_DOWNLOADS = 10
+export const ENGINE_RPC_PORT = 29100
+export const EXTENSION_API_PORT = 29110
+export const BT_LISTEN_PORT = 29120
+export const DHT_LISTEN_PORT = 29130
+export const ED2K_LISTEN_PORT = 29140
+export const ED2K_UDP_LISTEN_PORT = 29150
+export const ED2K_SERVER_MET_URL = 'https://upd.emule-security.org/server.met'
+export const ED2K_NODES_DAT_URL = 'https://upd.emule-security.org/nodes.dat'
+export const PORT_RECOVERY_RANGE_START = 29000
+export const PORT_RECOVERY_RANGE_END = 29999
+export const ENGINE_MAX_CONCURRENT_DOWNLOADS = 100
 export const ENGINE_MAX_CONNECTION_PER_SERVER = 256
 export const ENGINE_DEFAULT_CONNECTION_PER_SERVER = 64
 export const ENGINE_DEFAULT_SPLIT = 64
@@ -92,9 +102,8 @@ export const ONE_SECOND = 1000
 export const ONE_MINUTE = ONE_SECOND * 60
 export const ONE_HOUR = ONE_MINUTE * 60
 export const ONE_DAY = ONE_HOUR * 24
-
-// 12 Hours
-export const AUTO_SYNC_TRACKER_INTERVAL = ONE_HOUR * 12
+export const COMPLETED_RECORD_RETENTION_FOREVER = 0
+export const COMPLETED_RECORD_RETENTION_OPTIONS = [0, 1, 7, 180, 365] as const
 
 // One Week
 export const AUTO_CHECK_UPDATE_INTERVAL = ONE_DAY * 7
@@ -116,7 +125,7 @@ export const UPDATE_CHANNELS = ['stable', 'beta', 'latest'] as const
  *
  * Dynamic values handled at runtime:
  * - `locale: ''`    → OS locale detection in main.ts
- * - `dir: ''`       → system Downloads directory via Tauri API
+ * - `dir: ''`       → user-visible download directory resolver at runtime
  * - `rpcSecret`     → ABSENT from defaults; auto-generated on first launch in main.ts
  */
 
@@ -198,150 +207,6 @@ export const BUILTIN_CATEGORY_LABELS: ReadonlySet<string> = new Set(BUILTIN_CATE
  *  and REGISTERED_VERSIONS in src-tauri/src/db_guard.rs. */
 export const CURRENT_DB_SCHEMA_VERSION = 3
 
-export const DEFAULT_APP_CONFIG = {
-  configVersion: 5,
-  dbSchemaVersion: CURRENT_DB_SCHEMA_VERSION,
-  // ── Appearance ──────────────────────────────────────────────────
-  theme: 'auto' as const,
-  colorScheme: 'amber',
-  locale: 'auto',
-
-  // ── Download Core (aria2 defaults: concurrent=5, split=5, conn/server=1) ──
-  dir: '',
-  split: ENGINE_DEFAULT_SPLIT, // parallel segments per file; independent of maxConnectionPerServer since v2
-  maxConcurrentDownloads: 5, // aria2 default; IDM=4, FDM=3~12
-  maxConnectionPerServer: ENGINE_DEFAULT_CONNECTION_PER_SERVER, // per-server connection cap; independent of split since v2
-  maxOverallDownloadLimit: '0',
-  maxOverallUploadLimit: '0',
-  speedLimitEnabled: false,
-  speedScheduleEnabled: false,
-  speedScheduleFrom: '08:00',
-  speedScheduleTo: '18:00',
-  speedScheduleDays: 0, // 0 = every day
-  maxDownloadLimit: '',
-  maxUploadLimit: '',
-
-  // ── File Classification (IDM-style pre-download routing) ──────
-  fileCategoryEnabled: false, // opt-in: does not affect existing users until enabled
-  fileCategories: [] as import('@shared/types').FileCategory[],
-
-  // ── BitTorrent (qBT/Transmission/Deluge conventions) ──────────
-  btMaxPeers: ENGINE_DEFAULT_BT_MAX_PEERS, // aria2 default=55; qBT=100, Transmission=60, Deluge=200
-  seedRatio: 2, // old Motrix=2, Transmission=2; 2:1 supports BT ecosystem health
-  seedTime: 2880, // old Motrix=2880 (48h); generous default for healthy swarm contribution
-  keepSeeding: false, // qBT stops at ratio; safer default for new users
-  forceSave: true, // persist completed/seeding BT tasks in session file (aria2 skips FINISHED tasks without this)
-  btForceEncryption: false, // qBT default "Allow", not "Force"; forcing reduces peers
-  pauseMetadata: true, // pause follow-up download after metadata — let user select files first
-  continue: true, // aria2 default=true; resume incomplete downloads
-  remoteTime: false, // aria2 default=false; file timestamp = download completion time
-
-  // ── Interface & Behavior ──────────────────────────────────────
-  openAtLogin: false, // never auto-start on first install
-  keepWindowState: false, // first launch has no saved state
-
-  autoHideWindow: false,
-  minimizeToTrayOnClose: false, // close=quit is default UX
-  hideDockOnMinimize: false, // macOS: hide Dock icon when minimized to tray
-  lightweightMode: false, // destroy WebView on minimize-to-tray to free ~300MB RAM
-  showProgressBar: true,
-  traySpeedometer: false, // opt-in: supported on macOS menu bar + Linux appindicator
-  dockBadgeSpeed: true, // macOS Dock badge on by default
-  taskNotification: true, // users expect download-complete notifications
-  notifyOnStart: true,
-  notifyOnComplete: true, // main value of OS notification: background completion alert
-  newTaskShowDownloading: true, // auto-navigate to downloads after adding task
-  noConfirmBeforeDeleteTask: false, // require confirmation to prevent accidental deletion
-  deleteFilesWhenSkipConfirm: false, // when skip-confirm is on, default to keeping files (safe)
-  resumeAllWhenAppLaunched: false, // don't flood bandwidth on launch
-
-  // ── Auto Update ───────────────────────────────────────────────
-  autoCheckUpdate: true, // qBT checks every launch; security best practice
-  autoCheckUpdateInterval: 0, // 0 means every frontend startup, including lightweight restores
-  /** Linux-only: DMA-BUF GPU rendering is opt-in for Wayland/WebKitGTK stability. */
-  hardwareRendering: false,
-  updateChannel: 'stable' as const,
-  lastCheckUpdateTime: 0,
-
-  // ── Network & Security ────────────────────────────────────────
-  enableUpnp: true, // old Motrix=true; required for BitTorrent behind NAT
-  rpcListenPort: ENGINE_RPC_PORT,
-  extensionApiPort: 16801,
-  autoChangeConflictingPorts: true,
-  portConflictRecovery: {
-    enabled: true,
-    rangeStart: 30000,
-    rangeEnd: 39999,
-    rpc: true,
-    extensionApi: true,
-    bt: true,
-    dht: true,
-    ed2k: true,
-  },
-  // extensionApiSecret is intentionally ABSENT from defaults.
-  // rpcSecret is intentionally ABSENT from defaults.
-  // For both secrets:
-  //   undefined → main.ts auto-generates on first launch.
-  //   '' → user intentionally cleared (respected, not regenerated).
-  //   'abc' → user-set or auto-generated secret (kept as-is).
-  listenPort: 21301,
-  dhtListenPort: 26701,
-  ed2kListenPort: 4662,
-  ed2kServer: '',
-  ed2kServerList: '',
-  ed2kNodeList: '',
-  ed2kUploadSlots: 3,
-  ed2kShareFiles: [] as string[],
-  ed2kSearchTimeout: 20,
-  proxy: { enable: false, server: '', bypass: '', scope: ['download', 'update-app', 'update-trackers'] },
-  protocols: { magnet: true, ed2k: true, thunder: false, motrixnext: true },
-  clipboard: { enable: true, http: true, ftp: true, magnet: true, ed2k: true, thunder: true, btHash: true },
-  autoSubmitFromExtension: true,
-  autoSelectAllFilesFromExtension: false,
-  silentAutoSubmitFromExtension: true,
-  userAgent:
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
-  logLevel: 'debug', // captures full diagnostic output for bug reports out of the box
-  cookie: '',
-  runMode: '',
-  engineBinPath: '',
-  tempFilesDir: '',
-
-  // ── Tracker ───────────────────────────────────────────────────
-  autoSyncTracker: true,
-  trackerSource: [] as string[], // populated from DEFAULT_TRACKER_SOURCE below at runtime
-  customTrackerUrls: [] as string[],
-  btTracker: '',
-  lastSyncTrackerTime: 0,
-
-  // ── Directories ───────────────────────────────────────────────
-  historyDirectories: [] as string[],
-  favoriteDirectories: [] as string[],
-
-  // ── Cleanup ───────────────────────────────────────────────────
-  deleteTorrentAfterComplete: false,
-  autoDeleteStaleRecords: false,
-  clearCompletedOnExit: false,
-
-  // ── Power Management ────────────────────────────────────────────
-  shutdownWhenComplete: false,
-  keepAwake: false,
-
-  // ── Retry & Timeout (matches aria2.conf defaults) ──────────────
-  maxTries: 0, // 0 = unlimited retries
-  retryWait: 10, // seconds; aria2 waits this long after 503 before retrying
-  connectTimeout: 10, // seconds to establish connection
-  timeout: 10, // seconds for data transfer after connection
-  fileAllocation: 'none', // 'none' | 'trunc' | 'prealloc' | 'falloc'
-
-  // ── Task Sorting ─────────────────────────────────────────────
-  taskSort: DEFAULT_TASK_SORT,
-}
-
-export const FILE_ALLOCATION_OPTIONS = ['none', 'trunc', 'prealloc', 'falloc'] as const
-
-export const MAX_BT_TRACKER_LENGTH = 6144
-
 /**
  * @see https://github.com/ngosang/trackerslist
  */
@@ -371,15 +236,6 @@ export const XIU2_TRACKERS_HTTP_URL_CDN = 'https://cdn.jsdelivr.net/gh/XIU2/Trac
 
 // For bt-exclude-tracker
 export const XIU2_TRACKERS_BLACK_URL = 'https://cdn.jsdelivr.net/gh/XIU2/TrackersListCollection/blacklist.txt'
-
-/** Sensible default tracker sources for first install (CDN endpoints). */
-export const DEFAULT_TRACKER_SOURCE = [NGOSANG_TRACKERS_BEST_URL_CDN, NGOSANG_TRACKERS_BEST_IP_URL_CDN]
-
-// Backfill DEFAULT_APP_CONFIG.trackerSource now that the URLs are defined.
-// This preserves the single-source-of-truth invariant: DEFAULT_APP_CONFIG
-// is the authoritative set of defaults, and trackerSource is populated
-// once JS finishes evaluating all module-level constants.
-;(DEFAULT_APP_CONFIG as Record<string, unknown>).trackerSource = [...DEFAULT_TRACKER_SOURCE]
 
 export const TRACKER_SOURCE_OPTIONS = [
   {
@@ -462,7 +318,178 @@ export const TRACKER_SOURCE_OPTIONS = [
       },
     ],
   },
-]
+] as const
+
+/** Sensible default tracker sources for first install (all CDN endpoints). */
+export const DEFAULT_TRACKER_SOURCE = TRACKER_SOURCE_OPTIONS.flatMap((group) =>
+  group.options.filter((option) => option.cdn).map((option) => option.value),
+)
+
+export const DEFAULT_APP_CONFIG = {
+  configVersion: 5,
+  dbSchemaVersion: CURRENT_DB_SCHEMA_VERSION,
+  // ── Appearance ──────────────────────────────────────────────────
+  theme: 'auto' as const,
+  colorScheme: 'amber',
+  taskCardMode: 'full' as const,
+  locale: 'auto',
+
+  // ── Download Core ─────────────────────────────────────────────────
+  dir: '',
+  split: ENGINE_DEFAULT_SPLIT, // parallel segments per file; independent of maxConnectionPerServer since v2
+  maxConcurrentDownloads: 6,
+  maxConnectionPerServer: ENGINE_DEFAULT_CONNECTION_PER_SERVER, // per-server connection cap; independent of split since v2
+  maxOverallDownloadLimit: '0',
+  maxOverallUploadLimit: '0',
+  speedLimitEnabled: false,
+  speedScheduleEnabled: false,
+  speedScheduleFrom: '08:00',
+  speedScheduleTo: '18:00',
+  speedScheduleDays: 0, // 0 = every day
+  maxDownloadLimit: '',
+  maxUploadLimit: '',
+
+  // ── File Classification (IDM-style pre-download routing) ──────
+  fileCategoryEnabled: false, // opt-in: does not affect existing users until enabled
+  fileCategories: [] as import('@shared/types').FileCategory[],
+
+  // ── P2P Sharing (BT + ED2K) ────────────────────────────────────
+  shareRatio: 2, // Transmission/qBT-style default for healthy P2P contribution
+  shareTime: 2880, // 48h default sharing window
+  keepSharing: false, // stop by condition by default
+
+  // ── BitTorrent (qBT/Transmission/Deluge conventions) ──────────
+  btMaxPeers: ENGINE_DEFAULT_BT_MAX_PEERS, // aria2 default=55; qBT=100, Transmission=60, Deluge=200
+  btDhtEnabled: true, // improves peer discovery; also enables UDP tracker support
+  btPeerExchangeEnabled: true, // improves peer discovery inside active swarms
+  btLocalPeerDiscoveryEnabled: true, // aria2.conf legacy default; helps LAN peers
+  btForceEncryption: false, // qBT default "Allow", not "Force"; forcing reduces peers
+  pauseMetadata: true, // pause follow-up download after metadata — let user select files first
+  continue: true, // aria2 default=true; resume incomplete downloads
+  remoteTime: false, // aria2 default=false; file timestamp = download completion time
+
+  // ── Interface & Behavior ──────────────────────────────────────
+  openAtLogin: false, // never auto-start on first install
+  keepWindowState: false, // first launch has no saved state
+
+  autoHideWindow: false,
+  minimizeToTrayOnClose: false, // close=quit is default UX
+  hideDockOnMinimize: false, // macOS: hide Dock icon when minimized to tray
+  lightweightMode: false, // destroy WebView on minimize-to-tray to free ~300MB RAM
+  showProgressBar: true,
+  traySpeedometer: false, // opt-in: supported on macOS menu bar + Linux appindicator
+  dockBadgeSpeed: true, // macOS Dock badge on by default
+  taskNotification: true, // users expect download-complete notifications
+  notifyOnStart: true,
+  notifyOnComplete: true, // main value of OS notification: background completion alert
+  newTaskShowDownloading: true, // auto-navigate to downloads after adding task
+  noConfirmBeforeDeleteTask: false, // require confirmation to prevent accidental deletion
+  deleteFilesWhenSkipConfirm: false, // when skip-confirm is on, default to keeping files (safe)
+  resumeAllWhenAppLaunched: false, // don't flood bandwidth on launch
+
+  // ── Auto Update ───────────────────────────────────────────────
+  autoCheckUpdate: true, // qBT checks every launch; security best practice
+  autoCheckUpdateInterval: 0, // 0 means every frontend startup, including lightweight restores
+  /** Linux-only: DMA-BUF GPU rendering is opt-in for Wayland/WebKitGTK stability. */
+  hardwareRendering: false,
+  updateChannel: 'stable' as const,
+  lastCheckUpdateTime: 0,
+
+  // ── Network & Security ────────────────────────────────────────
+  enableUpnp: true, // old Motrix=true; required for BitTorrent behind NAT
+  rpcListenPort: ENGINE_RPC_PORT,
+  extensionApiPort: EXTENSION_API_PORT,
+  autoChangeConflictingPorts: true,
+  portConflictRecovery: {
+    enabled: true,
+    rangeStart: PORT_RECOVERY_RANGE_START,
+    rangeEnd: PORT_RECOVERY_RANGE_END,
+    rpc: true,
+    extensionApi: true,
+    bt: true,
+    dht: true,
+    ed2k: true,
+    ed2kUdp: true,
+  },
+  // extensionApiSecret is intentionally ABSENT from defaults.
+  // rpcSecret is intentionally ABSENT from defaults.
+  // For both secrets:
+  //   undefined → main.ts auto-generates on first launch.
+  //   '' → user intentionally cleared (respected, not regenerated).
+  //   'abc' → user-set or auto-generated secret (kept as-is).
+  listenPort: BT_LISTEN_PORT,
+  dhtListenPort: DHT_LISTEN_PORT,
+  ed2kListenPort: ED2K_LISTEN_PORT,
+  ed2kUdpListenPort: ED2K_UDP_LISTEN_PORT,
+  ed2kServer: '',
+  ed2kServerMetUrl: ED2K_SERVER_MET_URL,
+  ed2kNodesDatUrl: ED2K_NODES_DAT_URL,
+  ed2kUploadSlots: 3,
+  ed2kSearchTimeout: 20,
+  proxy: {
+    mode: 'direct' as const,
+    server: '',
+    username: '',
+    password: '',
+    bypass: '',
+    scope: ['download', 'update-app', 'update-trackers'],
+  },
+  clipboard: { enable: true, http: true, ftp: true, magnet: true, ed2k: true, thunder: true, btHash: true },
+  autoSubmitFromExtension: true,
+  autoSelectAllBtFilesFromExtension: false,
+  silentAutoSubmitFromExtension: true,
+  userAgent:
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+  userAgentProfiles: [],
+  userAgentRules: [],
+  recentUserAgentProfileIds: [],
+  logLevel: 'debug',
+  aria2LogLevel: 'notice',
+  cookie: '',
+  runMode: '',
+  engineBinPath: '',
+  tempFilesDir: '',
+
+  // ── Tracker ───────────────────────────────────────────────────
+  btTrackerAutoSync: true,
+  btTrackerSyncIntervalHours: 24,
+  trackerSource: [...DEFAULT_TRACKER_SOURCE],
+  customTrackerUrls: [] as string[],
+  btTracker: '',
+  lastSyncTrackerTime: 0,
+  ed2kBootstrapAutoSync: true,
+  ed2kBootstrapSyncIntervalHours: 24,
+
+  // ── Directories ───────────────────────────────────────────────
+  historyDirectories: [] as string[],
+  favoriteDirectories: [] as string[],
+
+  // ── Cleanup ───────────────────────────────────────────────────
+  deleteTorrentAfterComplete: false,
+  autoDeleteStaleRecords: false,
+  clearCompletedOnExit: false,
+  completedRecordRetentionDays: COMPLETED_RECORD_RETENTION_FOREVER,
+
+  // ── Power Management ────────────────────────────────────────────
+  shutdownWhenComplete: false,
+  keepAwake: false,
+
+  // ── Retry & Timeout (matches aria2.conf defaults) ──────────────
+  maxTries: 0, // 0 = unlimited retries
+  retryWait: 10, // seconds; aria2 waits this long after 503 before retrying
+  connectTimeout: 10, // seconds to establish connection
+  timeout: 10, // seconds for data transfer after connection
+  fileAllocation: 'prealloc' as const, // 'none' | 'trunc' | 'prealloc' | 'falloc'
+  asyncDns: false, // aria2-next default=true; keep Motrix default conservative
+
+  // ── Task Sorting ─────────────────────────────────────────────
+  taskSort: DEFAULT_TASK_SORT,
+  taskManualOrder: DEFAULT_TASK_MANUAL_ORDER,
+}
+
+export const FILE_ALLOCATION_OPTIONS = ['none', 'trunc', 'prealloc', 'falloc'] as const
+
+export const MAX_BT_TRACKER_LENGTH = 6144
 
 export const PROXY_SCOPES = {
   DOWNLOAD: 'download',

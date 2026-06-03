@@ -6,11 +6,11 @@ import { TASK_STATUS } from '@shared/constants'
 import { logger } from '@shared/logger'
 import {
   checkTaskIsBT,
-  checkTaskIsSeeder,
+  checkTaskIsSharing,
+  getTaskSharingKind,
   getTaskDisplayName,
   bytesToSize,
   calcProgress,
-  calcRatio,
   getFileName,
   getFileExtension,
   localeDateTimeFormat,
@@ -18,6 +18,8 @@ import {
   peerIdParser,
   timeRemaining,
   timeFormat,
+  getTaskCompletedLength,
+  isBtMetadataTask,
 } from '@shared/utils'
 import { decodePathSegment } from '@shared/utils/batchHelpers'
 import { calcColumnWidth } from '@shared/utils/calcColumnWidth'
@@ -32,9 +34,10 @@ import {
   NProgress,
   NTag,
   NButton,
-  NRadioGroup,
-  NRadio,
+  NSwitch,
+  NForm,
   NInput,
+  NInputGroup,
   NFormItem,
   NCollapseTransition,
   NEllipsis,
@@ -52,13 +55,21 @@ import {
 import TaskGraphic from './TaskGraphic.vue'
 import { useTrackerProbe, buildTrackerRows, type TrackerRow } from '@/composables/useTrackerProbe'
 import { useTaskDetailOptions } from '@/composables/useTaskDetailOptions'
+import {
+  buildBtHealthSummary,
+  buildEd2kDetailSummary,
+  buildTaskDetailKind,
+  buildTaskTransferSummary,
+  buildUriDetailSummary,
+} from '@/composables/useTaskDetailSummary'
 import { usePreferenceStore } from '@/stores/preference'
 import { useTaskStore } from '@/stores/task'
 import { useHistoryStore } from '@/stores/history'
 import { useAppMessage } from '@/composables/useAppMessage'
 import { useSystemProxyDetect } from '@/composables/useSystemProxyDetect'
 import { getAddedAt } from '@/composables/useTaskOrder'
-import type { Aria2Task, Aria2File, Aria2Peer } from '@shared/types'
+import type { Aria2Task, Aria2File, Aria2Peer, UserAgentProfile } from '@shared/types'
+import UserAgentPopover from '@/components/common/UserAgentPopover.vue'
 
 const props = defineProps<{
   show: boolean
@@ -73,12 +84,11 @@ const taskStore = useTaskStore()
 const historyStore = useHistoryStore()
 const message = useAppMessage()
 const taskRef = computed(() => props.task)
+const taskPrimaryUrl = computed(() => props.task?.files?.[0]?.uris?.[0]?.uri ?? '')
 
 const {
   form: optForm,
   canModify: optCanModify,
-  globalProxyAvailable: optGlobalProxyAvailable,
-  proxyAddress: optProxyAddress,
   dirty: optDirty,
   applying: optApplying,
   applyOptions: optApplyFn,
@@ -94,6 +104,7 @@ const {
 const { detecting: detectingProxy, detect: detectProxy } = useSystemProxyDetect({
   onSuccess(info) {
     optForm.customProxy = info.server
+    optForm.proxyMode = 'manual'
     message.success(t('preferences.proxy-detected-success'))
   },
   onSocks() {
@@ -107,6 +118,11 @@ const { detecting: detectingProxy, detect: detectProxy } = useSystemProxyDetect(
   },
 })
 
+function selectTaskUserAgentProfile(profile: UserAgentProfile) {
+  optForm.userAgent = profile.value
+  preferenceStore.recordRecentUserAgentProfile(profile.id)
+}
+
 const activeTab = ref('general')
 const slideDirection = ref<'left' | 'right'>('left')
 const prevTabIndex = ref(0)
@@ -116,20 +132,25 @@ interface TabDef {
   labelKey: string
   icon: typeof InformationCircleOutline
   btOnly?: boolean
-  ed2kOnly?: boolean
+  protocolOnly?: boolean
+  uriOnly?: boolean
 }
 const allTabs: TabDef[] = [
   { key: 'general', labelKey: 'task.task-tab-general', icon: InformationCircleOutline },
   { key: 'activity', labelKey: 'task.task-tab-activity', icon: PulseOutline },
   { key: 'files', labelKey: 'task.task-tab-files', icon: DocumentOutline },
   { key: 'options', labelKey: 'task.task-tab-options', icon: SettingsOutline },
-  { key: 'ed2k', labelKey: 'task.task-tab-ed2k', icon: ServerOutline, ed2kOnly: true },
+  { key: 'sources', labelKey: 'task.task-tab-sources', icon: ServerOutline, uriOnly: true },
+  { key: 'status', labelKey: 'task.task-tab-status', icon: PulseOutline, protocolOnly: true },
   { key: 'peers', labelKey: 'task.task-tab-peers', icon: PeopleOutline, btOnly: true },
   { key: 'trackers', labelKey: 'task.task-tab-trackers', icon: ServerOutline, btOnly: true },
 ]
 
 const visibleTabs = computed(() =>
-  allTabs.filter((tab) => (!tab.btOnly || isBT.value) && (!tab.ed2kOnly || isED2K.value)),
+  allTabs.filter(
+    (tab) =>
+      (!tab.btOnly || isBT.value) && (!tab.protocolOnly || isBT.value || isED2K.value) && (!tab.uriOnly || isURI.value),
+  ),
 )
 
 function switchTab(key: string) {
@@ -142,6 +163,12 @@ function switchTab(key: string) {
 
 const isBT = computed(() => (props.task ? checkTaskIsBT(props.task) : false))
 const isED2K = computed(() => !!props.task?.ed2k)
+const detailKind = computed(() => buildTaskDetailKind(props.task))
+const isURI = computed(() => detailKind.value === 'uri')
+const uriSummary = computed(() => buildUriDetailSummary(props.task))
+const btHealth = computed(() => buildBtHealthSummary(props.task))
+const ed2kSummary = computed(() => buildEd2kDetailSummary(props.task))
+const transferSummary = computed(() => buildTaskTransferSummary(props.task))
 
 const prevTaskGid = ref('')
 watch(
@@ -153,8 +180,25 @@ watch(
     }
   },
 )
-const isSeeder = computed(() => (props.task ? checkTaskIsSeeder(props.task) : false))
-const taskStatusKey = computed(() => (isSeeder.value ? TASK_STATUS.SEEDING : props.task?.status))
+
+watch(visibleTabs, (tabs) => {
+  if (!tabs.some((tab) => tab.key === activeTab.value)) {
+    activeTab.value = 'general'
+    prevTabIndex.value = 0
+  }
+})
+const sharingKind = computed(() => (props.task ? getTaskSharingKind(props.task) : null))
+const isSharing = computed(() => (props.task ? checkTaskIsSharing(props.task) : false))
+const isMetadataFetching = computed(() => (props.task ? isBtMetadataTask(props.task) : false))
+const taskStatusKey = computed(() =>
+  isSharing.value
+    ? sharingKind.value === 'bt'
+      ? 'seeding'
+      : 'sharing'
+    : isMetadataFetching.value
+      ? 'bt-metadata-fetching'
+      : props.task?.status,
+)
 const taskStatus = computed(() => {
   const key = taskStatusKey.value
   const translated = t(`task.status-${key}`)
@@ -193,15 +237,12 @@ watch(
   },
   { immediate: true },
 )
-const percent = computed(() => (props.task ? calcProgress(props.task.totalLength, props.task.completedLength) : 0))
+const completedLengthValue = computed(() => (props.task ? getTaskCompletedLength(props.task) : 0))
+const percent = computed(() => (props.task ? calcProgress(props.task.totalLength, completedLengthValue.value) : 0))
 
 const remaining = computed(() => {
   if (!isActive.value || !props.task) return 0
-  return timeRemaining(
-    Number(props.task.totalLength),
-    Number(props.task.completedLength),
-    Number(props.task.downloadSpeed),
-  )
+  return timeRemaining(Number(props.task.totalLength), completedLengthValue.value, Number(props.task.downloadSpeed))
 })
 
 const remainingText = computed(() => {
@@ -215,11 +256,6 @@ const remainingText = computed(() => {
       second: t('app.second') || 's',
     },
   })
-})
-
-const ratio = computed(() => {
-  if (!isBT.value || !props.task) return 0
-  return calcRatio(Number(props.task.totalLength), Number(props.task.uploadLength))
 })
 
 const btInfo = computed(() => {
@@ -322,6 +358,59 @@ const fileColumns = computed(() => {
       align: 'right' as const,
       sorter: (a: { length: number }, b: { length: number }) => a.length - b.length,
       render: (row: { length: number }) => bytesToSize(String(row.length)),
+    },
+  ]
+})
+
+const sourceRows = computed(() =>
+  (props.task?.files ?? []).flatMap((file) =>
+    (file.uris ?? []).map((uri, index) => ({
+      key: `${file.index}-${index}-${uri.uri}`,
+      fileIndex: Number(file.index),
+      uri: uri.uri,
+      status: uri.status || '-',
+    })),
+  ),
+)
+
+interface SourceRow {
+  key: string
+  fileIndex: number
+  uri: string
+  status: string
+}
+
+function sourceStatusLabel(status: string): string {
+  if (!status || status === '-') return '-'
+  const key = `task.task-source-${status}`
+  const translated = t(key)
+  return translated === key ? status : translated
+}
+
+const sourceColumns = computed(() => {
+  const data = sourceRows.value
+  return [
+    {
+      title: t('task.file-index') || '#',
+      key: 'fileIndex',
+      width: calcColumnWidth({
+        title: t('task.file-index') || '#',
+        values: data.map((r) => String(r.fileIndex)),
+        sortable: true,
+      }),
+      align: 'center' as const,
+      sorter: (a: SourceRow, b: SourceRow) => a.fileIndex - b.fileIndex,
+    },
+    { title: 'URL', key: 'uri', ellipsis: { tooltip: true } },
+    {
+      title: t('task.task-source-status'),
+      key: 'status',
+      width: calcColumnWidth({
+        title: t('task.task-source-status'),
+        values: data.map((r) => sourceStatusLabel(r.status)),
+      }),
+      align: 'center' as const,
+      render: (row: SourceRow) => sourceStatusLabel(row.status),
     },
   ]
 })
@@ -489,7 +578,7 @@ const trackerRows = computed((): TrackerRow[] => {
 })
 
 /** Sort-order mapping for tracker status: lower = higher priority. */
-const TRACKER_STATUS_ORDER: Record<string, number> = { online: 0, checking: 1, unknown: 2, offline: 3 }
+const TRACKER_STATUS_ORDER: Record<string, number> = { online: 0, checking: 1, 'not-probed': 2, unknown: 3, offline: 4 }
 
 const trackerColumns = computed(() => {
   const data = trackerRows.value
@@ -522,7 +611,7 @@ const trackerColumns = computed(() => {
       key: 'status',
       width: calcColumnWidth({
         title: t('task.task-tracker-status'),
-        values: ['online', 'offline', 'checking', 'unknown'].map((s) => t(`task.task-tracker-${s}`)),
+        values: ['online', 'offline', 'checking', 'not-probed', 'unknown'].map((s) => t(`task.task-tracker-${s}`)),
         sortable: true,
         extraWidth: 20,
       }),
@@ -580,7 +669,7 @@ function handleClose() {
           @click="switchTab(tab.key)"
         >
           <NIcon :size="16"><component :is="tab.icon" /></NIcon>
-          <span class="detail-tab-label">{{ tab.key === 'ed2k' ? t('task.task-tab-ed2k') : t(tab.labelKey) }}</span>
+          <span class="detail-tab-label">{{ t(tab.labelKey) }}</span>
         </button>
       </div>
 
@@ -600,6 +689,9 @@ function handleClose() {
                 <NDescriptionsItem :label="t('task.task-dir') || 'Directory'">{{ task.dir }}</NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-status') || 'Status'">
                   <NTag :type="statusTagType" size="small">{{ taskStatus }}</NTag>
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-type') || 'Type'">
+                  {{ t(`task.task-type-${detailKind}`) }}
                 </NDescriptionsItem>
                 <NDescriptionsItem
                   v-if="task.errorCode && task.errorCode !== '0'"
@@ -651,12 +743,6 @@ function handleClose() {
                   :label-style="{ width: '1px', whiteSpace: 'nowrap' }"
                 >
                   <NDescriptionsItem :label="t('task.task-ed2k-hash')">{{ ed2kInfo.hash || '-' }}</NDescriptionsItem>
-                  <NDescriptionsItem :label="t('task.task-ed2k-server-count')">
-                    {{ ed2kInfo.connectedServerCount || 0 }} / {{ ed2kInfo.serverCount || 0 }}
-                  </NDescriptionsItem>
-                  <NDescriptionsItem :label="t('task.task-ed2k-peer-count')">
-                    {{ ed2kInfo.peerCount || 0 }}
-                  </NDescriptionsItem>
                 </NDescriptions>
               </template>
             </template>
@@ -673,25 +759,78 @@ function handleClose() {
                   </div>
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-file-size') || 'Size'">
-                  {{ bytesToSize(task.completedLength, 2) }}
+                  {{ bytesToSize(completedLengthValue, 2) }}
                   <span v-if="Number(task.totalLength) > 0"> / {{ bytesToSize(task.totalLength, 2) }}</span>
                   <span v-if="remainingText" class="remaining-text">{{ remainingText }}</span>
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-download-speed') || 'DL Speed'">
                   {{ bytesToSize(task.downloadSpeed) }}/s
                 </NDescriptionsItem>
-                <NDescriptionsItem v-if="isBT" :label="t('task.task-upload-speed') || 'UL Speed'">
+                <NDescriptionsItem
+                  v-if="transferSummary.showUploadMetrics"
+                  :label="t('task.task-upload-speed') || 'UL Speed'"
+                >
                   {{ bytesToSize(task.uploadSpeed) }}/s
                 </NDescriptionsItem>
-                <NDescriptionsItem v-if="isBT" :label="t('task.task-upload-length') || 'Uploaded'">
+                <NDescriptionsItem
+                  v-if="transferSummary.showUploadMetrics"
+                  :label="t('task.task-upload-length') || 'Uploaded'"
+                >
                   {{ bytesToSize(task.uploadLength) }}
                 </NDescriptionsItem>
-                <NDescriptionsItem v-if="isBT" :label="t('task.task-ratio') || 'Ratio'">{{ ratio }}</NDescriptionsItem>
-                <NDescriptionsItem v-if="isBT" :label="t('task.task-num-seeders') || 'Seeders'">
+                <NDescriptionsItem v-if="transferSummary.showUploadMetrics" :label="t('task.task-ratio') || 'Ratio'">
+                  {{ transferSummary.ratio }}
+                </NDescriptionsItem>
+                <NDescriptionsItem v-if="transferSummary.showSeeders" :label="t('task.task-num-seeders') || 'Seeders'">
                   {{ task.numSeeders }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-connections') || 'Connections'">
                   {{ task.connections }}
+                </NDescriptionsItem>
+              </NDescriptions>
+            </template>
+          </div>
+
+          <div v-else-if="activeTab === 'status' && isBT" key="bt-status" class="tab-content">
+            <template v-if="task && isBT">
+              <NDescriptions
+                :column="1"
+                label-placement="left"
+                bordered
+                size="small"
+                :label-style="{ width: '1px', whiteSpace: 'nowrap' }"
+              >
+                <NDescriptionsItem :label="t('task.task-bt-metadata-state')">
+                  {{ t(`task.task-bt-metadata-${btHealth.metadataState}`) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-bt-has-metadata')">
+                  {{ yesNo(btHealth.hasMetadata) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-bt-selected-files')">
+                  {{ btHealth.selectedFileCount }} / {{ btHealth.totalFileCount }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-bt-selected-size')">
+                  {{ bytesToSize(btHealth.selectedLength) }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-bt-trackers')">
+                  {{ btHealth.trackerCount }}
+                  <span v-if="btHealth.unprobeableTrackerCount > 0" class="muted-inline">
+                    · {{ btHealth.unprobeableTrackerCount }} {{ t('task.task-tracker-not-probed') }}
+                  </span>
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-bt-peers')">
+                  {{ btHealth.peerCount }}
+                  <span v-if="btHealth.seederPeerCount > 0" class="muted-inline">
+                    · {{ btHealth.seederPeerCount }} {{ t('task.task-peer-seeder') }}
+                  </span>
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-bt-active-peers')">
+                  {{ t('task.task-peer-download-speed') }} {{ btHealth.activeDownloadPeerCount }} /
+                  {{ t('task.task-peer-upload-speed') }} {{ btHealth.activeUploadPeerCount }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-bt-choking')">
+                  {{ t('task.task-bt-am-choking') }} {{ btHealth.amChokingCount }} /
+                  {{ t('task.task-bt-peer-choking') }} {{ btHealth.peerChokingCount }}
                 </NDescriptionsItem>
               </NDescriptions>
             </template>
@@ -710,16 +849,65 @@ function handleClose() {
             />
           </div>
 
-          <div v-else-if="activeTab === 'options'" key="options" class="tab-content">
-            <div class="options-form">
-              <NFormItem :label="t('task.task-user-agent') + ':'">
-                <NInput
-                  v-model:value="optForm.userAgent"
-                  type="textarea"
-                  :autosize="{ minRows: 1, maxRows: 3 }"
-                  :readonly="!optCanModify"
-                  :placeholder="t('task.task-user-agent-placeholder') || ''"
+          <div v-else-if="activeTab === 'sources'" key="sources" class="tab-content">
+            <template v-if="task && isURI">
+              <NDescriptions
+                :column="1"
+                label-placement="left"
+                bordered
+                size="small"
+                :label-style="{ width: '1px', whiteSpace: 'nowrap' }"
+              >
+                <NDescriptionsItem :label="t('task.task-primary-uri')">
+                  <NEllipsis>{{ uriSummary.primaryUri || '-' }}</NEllipsis>
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-source-files')">
+                  {{ uriSummary.selectedFileCount }} / {{ uriSummary.fileCount }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-source-mirrors')">
+                  {{ uriSummary.mirrorCount }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-source-used')">
+                  {{ uriSummary.usedMirrorCount }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-source-waiting')">
+                  {{ uriSummary.waitingMirrorCount }}
+                </NDescriptionsItem>
+              </NDescriptions>
+              <div v-if="sourceRows.length > 0" class="source-table">
+                <NDataTable
+                  :columns="sourceColumns"
+                  :data="sourceRows"
+                  :row-key="(row: SourceRow) => row.key"
+                  size="small"
+                  :bordered="true"
+                  :max-height="320"
+                  striped
                 />
+              </div>
+            </template>
+          </div>
+
+          <div v-else-if="activeTab === 'options'" key="options" class="tab-content">
+            <NForm label-placement="left" label-width="110px" class="options-form">
+              <NFormItem :label="t('task.task-user-agent') + ':'">
+                <NInputGroup class="detail-ua-row">
+                  <NInput
+                    v-model:value="optForm.userAgent"
+                    type="textarea"
+                    :autosize="{ minRows: 1, maxRows: 3 }"
+                    :readonly="!optCanModify"
+                    :placeholder="t('task.task-user-agent-placeholder') || ''"
+                  />
+                  <UserAgentPopover
+                    :url="taskPrimaryUrl"
+                    :profiles="preferenceStore.config.userAgentProfiles"
+                    :rules="preferenceStore.config.userAgentRules"
+                    :recent-profile-ids="preferenceStore.config.recentUserAgentProfileIds"
+                    :disabled="!optCanModify"
+                    @select="selectTaskUserAgentProfile"
+                  />
+                </NInputGroup>
               </NFormItem>
               <NFormItem :label="t('task.task-authorization') + ':'">
                 <NInput
@@ -764,29 +952,33 @@ function handleClose() {
                   :placeholder="t('task.task-cookie-placeholder') || ''"
                 />
               </NFormItem>
-              <NFormItem :label="t('task.task-proxy-label') + ':'">
-                <div class="proxy-radio-group">
-                  <NRadioGroup v-model:value="optForm.proxyMode" :disabled="!optCanModify" name="task-proxy-mode">
-                    <NRadio value="none">{{ t('task.proxy-mode-none') }}</NRadio>
-                    <NRadio v-if="optGlobalProxyAvailable" value="global">
-                      {{ t('task.proxy-mode-global') }}
-                    </NRadio>
-                    <NRadio value="custom">{{ t('task.proxy-mode-custom') }}</NRadio>
-                  </NRadioGroup>
-                  <div
-                    class="proxy-hint-collapse"
-                    :class="{ 'proxy-hint-collapse--open': optForm.proxyMode === 'global' }"
-                  >
-                    <div class="proxy-hint-collapse__inner">
-                      <div class="proxy-server-hint">{{ t('task.proxy-global-server') }} {{ optProxyAddress }}</div>
-                    </div>
-                  </div>
-                  <NCollapseTransition :show="optForm.proxyMode === 'custom'">
+              <NFormItem :label="t('task.use-proxy') + ':'">
+                <NSwitch
+                  :value="optForm.proxyMode === 'manual'"
+                  :disabled="!optCanModify"
+                  @update:value="optForm.proxyMode = $event ? 'manual' : 'direct'"
+                />
+              </NFormItem>
+              <NFormItem label=" " :show-feedback="false" class="proxy-options-item">
+                <NCollapseTransition :show="optForm.proxyMode === 'manual'">
+                  <div class="proxy-radio-group">
                     <div class="custom-proxy-input">
                       <NInput
                         v-model:value="optForm.customProxy"
                         :readonly="!optCanModify"
                         :placeholder="'http://host:port'"
+                      />
+                      <NInput
+                        v-model:value="optForm.customProxyUsername"
+                        :readonly="!optCanModify"
+                        :placeholder="t('preferences.proxy-username') || ''"
+                      />
+                      <NInput
+                        v-model:value="optForm.customProxyPassword"
+                        type="password"
+                        show-password-on="click"
+                        :readonly="!optCanModify"
+                        :placeholder="t('preferences.proxy-password') || ''"
                       />
                       <NButton :loading="detectingProxy" :disabled="!optCanModify" size="small" @click="detectProxy">
                         <template #icon>
@@ -795,8 +987,8 @@ function handleClose() {
                         {{ t('preferences.detect-system-proxy') }}
                       </NButton>
                     </div>
-                  </NCollapseTransition>
-                </div>
+                  </div>
+                </NCollapseTransition>
               </NFormItem>
               <div v-if="optCanModify" class="options-apply-bar">
                 <NButton
@@ -809,10 +1001,10 @@ function handleClose() {
                   {{ optDirty ? t('task.apply-changes') : t('task.no-changes') }}
                 </NButton>
               </div>
-            </div>
+            </NForm>
           </div>
 
-          <div v-else-if="activeTab === 'ed2k'" key="ed2k" class="tab-content">
+          <div v-else-if="activeTab === 'status' && isED2K" key="ed2k-status" class="tab-content">
             <template v-if="ed2kInfo">
               <NDescriptions
                 :column="1"
@@ -833,49 +1025,52 @@ function handleClose() {
                   {{ ed2kInfo.aichRoot || '-' }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-server-count')">
-                  {{ ed2kInfo.connectedServerCount || 0 }} / {{ ed2kInfo.serverCount || 0 }}
+                  {{ ed2kSummary.connectedServerCount }} / {{ ed2kSummary.serverCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-peer-count')">
-                  {{ ed2kInfo.peerCount || 0 }}
+                  {{ ed2kSummary.peerCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-queued-peer-count')">
-                  {{ ed2kInfo.queuedPeerCount || 0 }}
+                  {{ ed2kSummary.queuedPeerCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-accepted-peer-count')">
-                  {{ ed2kInfo.acceptedPeerCount || 0 }}
+                  {{ ed2kSummary.acceptedPeerCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-dead-peer-count')">
-                  {{ ed2kInfo.deadPeerCount || 0 }}
+                  {{ ed2kSummary.deadPeerCount }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-low-id-peer-count')">
+                  {{ ed2kSummary.lowIdPeerCount }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('task.task-ed2k-callback-waiting-peer-count')">
+                  {{ ed2kSummary.callbackWaitingPeerCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-kad-node-count')">
-                  {{ ed2kInfo.kadNodeCount || 0 }}
+                  {{ ed2kSummary.kadNodeCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-kad-router-count')">
-                  {{ ed2kInfo.kadRouterCount || 0 }}
+                  {{ ed2kSummary.kadRouterCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-kad-firewalled')">
-                  {{ yesNo(ed2kInfo.kadFirewalled) }}
+                  {{ yesNo(ed2kSummary.kadFirewalled) }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-kad-observed-address-count')">
                   {{ ed2kInfo.kadObservedAddressCount || 0 }}
                 </NDescriptionsItem>
-                <NDescriptionsItem :label="t('task.task-ed2k-search-active')">
+                <NDescriptionsItem v-if="ed2kSummary.hasSearchState" :label="t('task.task-ed2k-search-active')">
                   {{ yesNo(ed2kInfo.searchActive) }}
                 </NDescriptionsItem>
-                <NDescriptionsItem :label="t('task.task-ed2k-search-more-results')">
+                <NDescriptionsItem v-if="ed2kSummary.hasSearchState" :label="t('task.task-ed2k-search-more-results')">
                   {{ yesNo(ed2kInfo.searchMoreResults) }}
                 </NDescriptionsItem>
-                <NDescriptionsItem :label="t('task.task-ed2k-search-result-count')">
+                <NDescriptionsItem v-if="ed2kSummary.hasSearchState" :label="t('task.task-ed2k-search-result-count')">
                   {{ ed2kInfo.searchResultCount || 0 }}
                 </NDescriptionsItem>
-                <NDescriptionsItem :label="t('task.task-ed2k-shared-file-count')">
-                  {{ ed2kInfo.sharedFileCount || 0 }}
-                </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-uploading-peer-count')">
-                  {{ ed2kInfo.uploadingPeerCount || 0 }}
+                  {{ ed2kSummary.uploadingPeerCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-waiting-upload-peer-count')">
-                  {{ ed2kInfo.waitingUploadPeerCount || 0 }}
+                  {{ ed2kSummary.waitingUploadPeerCount }}
                 </NDescriptionsItem>
                 <NDescriptionsItem :label="t('task.task-ed2k-peer-credit-count')">
                   {{ ed2kInfo.peerCreditCount || 0 }}
@@ -997,6 +1192,15 @@ function handleClose() {
   color: var(--m3-on-surface-variant);
   font-size: 12px;
 }
+.muted-inline {
+  color: var(--m3-on-surface-variant);
+  font-size: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+}
+.source-table {
+  margin-top: 12px;
+}
 
 .detail-footer {
   display: flex;
@@ -1067,6 +1271,14 @@ function handleClose() {
 .options-form {
   padding: 4px 0;
 }
+.detail-ua-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+.detail-ua-row :deep(.n-input) {
+  flex: 1;
+}
 .options-apply-bar {
   display: flex;
   justify-content: flex-end;
@@ -1088,8 +1300,6 @@ function handleClose() {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 4px;
-  margin-left: 24px;
 }
 .custom-proxy-input .n-button {
   align-self: flex-start;
@@ -1100,25 +1310,6 @@ function handleClose() {
   gap: 6px;
   width: 100%;
 }
-.proxy-hint-collapse {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 0.25s ease;
-}
-.proxy-hint-collapse--open {
-  grid-template-rows: 1fr;
-}
-.proxy-hint-collapse__inner {
-  overflow: hidden;
-}
-.proxy-server-hint {
-  font-size: var(--font-size-sm);
-  color: var(--n-text-color-3, #999);
-  opacity: 0.8;
-  user-select: all;
-  padding: 4px 0 2px;
-}
-
 /* Allow table header text to wrap instead of truncating with "…"
    when the column is too narrow for the translated label. */
 :deep(.n-data-table-th__title) {

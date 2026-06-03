@@ -13,7 +13,16 @@ export const calcProgress = (totalLength: string | number, completedLength: stri
   return parseFloat(percentage.toFixed(decimal))
 }
 
-/** Calculates upload-to-download ratio for seeding tasks. */
+const parseLength = (value: string | number | undefined): number => {
+  const parsed = Number(value ?? 0)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
+
+export const getTaskCompletedLength = (task: Aria2Task): number => {
+  return parseLength(task.completedLength)
+}
+
+/** Calculates upload-to-download ratio for shared-upload tasks. */
 export const calcRatio = (totalLength: string | number, uploadLength: string | number): number => {
   const total = parseInt(String(totalLength), 10)
   const upload = parseInt(String(uploadLength), 10)
@@ -92,10 +101,26 @@ export const isMagnetTask = (task: Aria2Task): boolean => {
   return !!bittorrent && !bittorrent.info
 }
 
-/** Returns true if the task is actively seeding (BT upload-only, must be running). */
-export const checkTaskIsSeeder = (task: Aria2Task): boolean => {
-  const { bittorrent, seeder, status } = task
-  return !!bittorrent && seeder === 'true' && status === 'active'
+/** Returns true when native aria2 is still resolving torrent metadata. */
+export const isBtMetadataTask = (task: Aria2Task): boolean => {
+  if (!task.bittorrent) return false
+  if (task.bittorrent.info) return false
+  return !task.following
+}
+
+export type TaskSharingKind = 'bt' | 'ed2k'
+
+/** Returns the protocol-specific shared-upload state, if the task is upload-only and active. */
+export const getTaskSharingKind = (task: Aria2Task): TaskSharingKind | null => {
+  if (task.status !== 'active' || task.seeder !== 'true') return null
+  if (task.bittorrent) return 'bt'
+  if (task.ed2k) return 'ed2k'
+  return null
+}
+
+/** Returns true if the task is in a completed shared-upload state. */
+export const checkTaskIsSharing = (task: Aria2Task): boolean => {
+  return getTaskSharingKind(task) !== null
 }
 
 /** Returns true if the task is a BitTorrent download (has bittorrent metadata). */

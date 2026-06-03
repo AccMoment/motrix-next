@@ -6,8 +6,10 @@ import { useI18n } from 'vue-i18n'
 import { usePreferenceStore } from '@/stores/preference'
 import { usePreferenceForm } from '@/composables/usePreferenceForm'
 import { useEngineRestart } from '@/composables/useEngineRestart'
+import { usePlatform } from '@/composables/usePlatform'
 import { useSystemProxyDetect } from '@/composables/useSystemProxyDetect'
 import { logger } from '@shared/logger'
+import { getErrorMessage } from '@shared/utils/errorMessage'
 import { useAppMessage } from '@/composables/useAppMessage'
 import { PROXY_SCOPE_OPTIONS, FILE_ALLOCATION_OPTIONS, ENGINE_RPC_PORT } from '@shared/constants'
 import { diffConfig, checkIsNeedRestart } from '@shared/utils/config'
@@ -19,6 +21,7 @@ import {
   randomBtPort,
   randomDhtPort,
 } from '@/composables/useNetworkPreference'
+import { proxySwitchValueToMode } from '@shared/utils/proxyPolicy'
 
 import userAgentMap from '@shared/ua'
 import { hasUnsafeHeaderChars, sanitizeHeaderValue } from '@shared/utils/headerSanitize'
@@ -35,31 +38,44 @@ import {
   NDivider,
   NIcon,
   NText,
+  NCollapseTransition,
+  NRadioButton,
+  NRadioGroup,
   useDialog,
 } from 'naive-ui'
 const needsRestart = ref(false)
 import PreferenceActionBar from './PreferenceActionBar.vue'
 import PreferenceCheckboxGrid from './PreferenceCheckboxGrid.vue'
+import PreferenceHintLabel from './PreferenceHintLabel.vue'
+import UserAgentManager from './UserAgentManager.vue'
 import { SearchOutline, DiceOutline } from '@vicons/ionicons5'
 
 const { t } = useI18n()
 const preferenceStore = usePreferenceStore()
 const dialog = useDialog()
 const message = useAppMessage()
+const { isWindows } = usePlatform()
 
 const proxyScopeOptions = PROXY_SCOPE_OPTIONS.map((s: string) => ({
   label: t(`preferences.proxy-scope-${s}`),
   value: s,
 }))
+const fileAllocationOptions = computed(() =>
+  FILE_ALLOCATION_OPTIONS.filter((value) => !(isWindows.value && value === 'falloc')).map((value) => ({
+    label: value,
+    value,
+  })),
+)
 
-type PortRecoveryTarget = 'rpc' | 'extensionApi' | 'bt' | 'dht' | 'ed2k'
-const portRecoveryTargets: PortRecoveryTarget[] = ['rpc', 'extensionApi', 'bt', 'dht', 'ed2k']
+type PortRecoveryTarget = 'rpc' | 'extensionApi' | 'bt' | 'dht' | 'ed2k' | 'ed2kUdp'
+const portRecoveryTargets: PortRecoveryTarget[] = ['rpc', 'extensionApi', 'bt', 'dht', 'ed2k', 'ed2kUdp']
 const portRecoveryTargetOptions = computed(() => [
   { label: t('preferences.rpc-listen-port'), value: 'rpc' },
   { label: t('preferences.extension-api-port'), value: 'extensionApi' },
   { label: t('preferences.port-conflict-recovery-bt'), value: 'bt' },
   { label: t('preferences.port-conflict-recovery-dht'), value: 'dht' },
   { label: t('preferences.port-conflict-recovery-ed2k'), value: 'ed2k' },
+  { label: t('preferences.port-conflict-recovery-ed2k-udp'), value: 'ed2kUdp' },
 ])
 const selectedPortRecoveryTargets = computed<string[]>({
   get: () => portRecoveryTargets.filter((target) => form.value.portConflictRecovery[target]),
@@ -76,7 +92,7 @@ const { detecting: detectingProxy, detect: detectProxy } = useSystemProxyDetect(
   onSuccess(info) {
     form.value.proxy.server = info.server
     if (info.bypass) form.value.proxy.bypass = info.bypass
-    if (!form.value.proxy.enable) form.value.proxy.enable = true
+    form.value.proxy.mode = 'manual'
     message.success(t('preferences.proxy-detected-success'))
   },
   onSocks() {
@@ -136,7 +152,13 @@ const { form, isDirty, handleSave, handleReset, resetSnapshot } = usePreferenceF
       f.enableUpnp !== prevConfig.enableUpnp ||
       (f.enableUpnp && (f.listenPort !== prevConfig.listenPort || f.dhtListenPort !== prevConfig.dhtListenPort))
     ) {
-      syncUpnpState(!!f.enableUpnp, f.listenPort, f.dhtListenPort, preferenceStore.config.ed2kListenPort)
+      syncUpnpState(
+        !!f.enableUpnp,
+        f.listenPort,
+        f.dhtListenPort,
+        preferenceStore.config.ed2kListenPort,
+        preferenceStore.config.ed2kUdpListenPort,
+      )
     }
 
     // Engine restart — user already confirmed in beforeSave, execute immediately.
@@ -161,15 +183,20 @@ function onDhtPortDice() {
 }
 
 // ── UPnP save-time sync ─────────────────────────────────────────────
-async function syncUpnpState(enabled: boolean, btPort: number, dhtPort: number, ed2kPort: number) {
+async function syncUpnpState(enabled: boolean, btPort: number, dhtPort: number, ed2kPort: number, ed2kUdpPort: number) {
   try {
     if (enabled) {
-      await invoke('start_upnp_mapping', { btPort, dhtPort, ed2kPort: ed2kPort > 0 ? ed2kPort : null })
+      await invoke('start_upnp_mapping', {
+        btPort,
+        dhtPort,
+        ed2kPort: ed2kPort > 0 ? ed2kPort : null,
+        ed2kUdpPort: ed2kUdpPort > 0 ? ed2kUdpPort : null,
+      })
     } else {
       await invoke('stop_upnp_mapping')
     }
   } catch (e) {
-    logger.warn('UPnP', `sync failed: ${e}`)
+    logger.warn('UPnP', `sync failed: ${getErrorMessage(e)}`)
     message.warning(t('preferences.upnp-mapping-failed'))
   }
 }
@@ -184,6 +211,10 @@ const uaHasIssue = computed(() => !!form.value.userAgent && hasUnsafeHeaderChars
 
 function cleanUserAgent() {
   form.value.userAgent = sanitizeHeaderValue(form.value.userAgent as string)
+}
+
+function handleProxySwitch(value: boolean) {
+  form.value.proxy.mode = proxySwitchValueToMode(value)
 }
 
 function handleManualRestart() {
@@ -217,15 +248,24 @@ onMounted(() => {
     <NForm label-placement="left" label-align="left" label-width="260px" size="small" class="form-preference">
       <!-- Proxy -->
       <NDivider title-placement="left">{{ t('preferences.proxy') }}</NDivider>
-      <NFormItem :label="t('preferences.enable-proxy')">
-        <NSwitch v-model:value="form.proxy.enable" />
+      <NFormItem>
+        <template #label>
+          <PreferenceHintLabel :label="t('task.use-proxy')" :hint="t('preferences.proxy-request-scope-hint')" />
+        </template>
+        <NSwitch :value="form.proxy.mode !== 'direct'" @update:value="handleProxySwitch" />
       </NFormItem>
-      <div class="proxy-collapse" :class="{ 'proxy-collapse--open': form.proxy.enable }">
+      <div class="proxy-collapse" :class="{ 'proxy-collapse--open': form.proxy.mode === 'manual' }">
         <div class="proxy-collapse__inner collapse-indent">
-          <NFormItem :label="t('preferences.proxy-server')">
+          <NFormItem>
+            <template #label>
+              <PreferenceHintLabel
+                :label="t('preferences.proxy-server')"
+                :hint="t('preferences.proxy-http-only-hint')"
+              />
+            </template>
             <NInputGroup>
-              <NInput v-model:value="form.proxy.server" placeholder="[http://][USER:PASSWORD@]HOST[:PORT]" />
-              <NButton :loading="detectingProxy" @click="detectProxy">
+              <NInput v-model:value="form.proxy.server" class="pref-control-full" placeholder="http://host:port" />
+              <NButton class="pref-action-button" :loading="detectingProxy" @click="detectProxy">
                 <template #icon>
                   <NIcon><SearchOutline /></NIcon>
                 </template>
@@ -233,8 +273,11 @@ onMounted(() => {
               </NButton>
             </NInputGroup>
           </NFormItem>
-          <NFormItem :show-label="false">
-            <div class="info-text">{{ t('preferences.proxy-http-only-hint') }}</div>
+          <NFormItem :label="t('preferences.proxy-username')">
+            <NInput v-model:value="form.proxy.username" />
+          </NFormItem>
+          <NFormItem :label="t('preferences.proxy-password')">
+            <NInput v-model:value="form.proxy.password" type="password" show-password-on="click" />
           </NFormItem>
           <NFormItem :label="t('preferences.proxy-bypass')">
             <NInput
@@ -245,7 +288,7 @@ onMounted(() => {
             />
           </NFormItem>
           <NFormItem :label="t('preferences.proxy-scope')">
-            <NSelect v-model:value="form.proxy.scope" :options="proxyScopeOptions" multiple style="width: 100%" />
+            <NSelect v-model:value="form.proxy.scope" :options="proxyScopeOptions" multiple class="pref-control-full" />
           </NFormItem>
         </div>
       </div>
@@ -260,25 +303,28 @@ onMounted(() => {
         :class="{ 'port-recovery-collapse--open': form.portConflictRecovery.enabled }"
       >
         <div class="port-recovery-collapse__inner collapse-indent">
-          <NFormItem :label="t('preferences.port-conflict-recovery-range')">
+          <NFormItem>
+            <template #label>
+              <PreferenceHintLabel
+                :label="t('preferences.port-conflict-recovery-range')"
+                :hint="t('preferences.port-conflict-recovery-range-hint')"
+              />
+            </template>
             <NInputGroup>
               <NInputNumber
                 v-model:value="form.portConflictRecovery.rangeStart"
                 :min="1024"
                 :max="65535"
-                style="width: 140px"
+                class="pref-port"
               />
               <span class="port-range-separator">to</span>
               <NInputNumber
                 v-model:value="form.portConflictRecovery.rangeEnd"
                 :min="1024"
                 :max="65535"
-                style="width: 140px"
+                class="pref-port"
               />
             </NInputGroup>
-          </NFormItem>
-          <NFormItem :show-label="false">
-            <div class="info-text">{{ t('preferences.port-conflict-recovery-range-hint') }}</div>
           </NFormItem>
           <NFormItem :label="t('preferences.port-conflict-recovery-apply-to')">
             <PreferenceCheckboxGrid v-model:value="selectedPortRecoveryTargets" :options="portRecoveryTargetOptions" />
@@ -293,8 +339,8 @@ onMounted(() => {
       </NFormItem>
       <NFormItem :label="t('preferences.bt-port')">
         <NInputGroup>
-          <NInputNumber v-model:value="form.listenPort" :min="1024" :max="65535" style="width: 160px" />
-          <NButton style="padding: 0 10px" @click="onBtPortDice">
+          <NInputNumber v-model:value="form.listenPort" :min="1024" :max="65535" class="pref-port" />
+          <NButton class="pref-icon-button" @click="onBtPortDice">
             <template #icon>
               <NIcon :size="14"><DiceOutline /></NIcon>
             </template>
@@ -303,14 +349,49 @@ onMounted(() => {
       </NFormItem>
       <NFormItem :label="t('preferences.dht-port')">
         <NInputGroup>
-          <NInputNumber v-model:value="form.dhtListenPort" :min="1024" :max="65535" style="width: 160px" />
-          <NButton style="padding: 0 10px" @click="onDhtPortDice">
+          <NInputNumber v-model:value="form.dhtListenPort" :min="1024" :max="65535" class="pref-port" />
+          <NButton class="pref-icon-button" @click="onDhtPortDice">
             <template #icon>
               <NIcon :size="14"><DiceOutline /></NIcon>
             </template>
           </NButton>
         </NInputGroup>
       </NFormItem>
+
+      <!-- P2P Sharing -->
+      <NDivider title-placement="left">{{ t('preferences.p2p-sharing-section') }}</NDivider>
+      <NFormItem>
+        <template #label>
+          <PreferenceHintLabel
+            :label="t('preferences.sharing-mode')"
+            :hint="t('preferences.sharing-mode-scope-hint')"
+          />
+        </template>
+        <NRadioGroup v-model:value="form.sharingMode" size="small">
+          <NRadioButton value="stop-by-condition">
+            {{ t('preferences.sharing-mode-stop-by-condition') }}
+          </NRadioButton>
+          <NRadioButton value="manual-stop">{{ t('preferences.sharing-mode-manual-stop') }}</NRadioButton>
+        </NRadioGroup>
+      </NFormItem>
+      <NCollapseTransition :show="form.sharingMode === 'stop-by-condition'" class="collapse-indent">
+        <NFormItem :label="t('preferences.share-ratio')">
+          <NInputNumber v-model:value="form.shareRatio" :min="1" :max="100" :step="0.1" class="pref-number" />
+        </NFormItem>
+        <NFormItem :label="t('preferences.share-time') + ' (' + t('preferences.share-time-unit') + ')'">
+          <NInputNumber v-model:value="form.shareTime" :min="60" :max="525600" class="pref-number" />
+        </NFormItem>
+      </NCollapseTransition>
+      <NCollapseTransition :show="form.sharingMode === 'manual-stop'" class="collapse-indent">
+        <NFormItem>
+          <template #label>
+            <PreferenceHintLabel
+              :label="t('preferences.sharing-mode-manual-stop')"
+              :hint="t('preferences.sharing-mode-manual-stop-tips')"
+            />
+          </template>
+        </NFormItem>
+      </NCollapseTransition>
 
       <!-- User-Agent -->
       <NDivider title-placement="left">{{ t('preferences.user-agent') }}</NDivider>
@@ -334,37 +415,45 @@ onMounted(() => {
           </div>
         </div>
       </NFormItem>
-      <NFormItem :show-label="false">
+      <NFormItem label=" ">
         <div class="ua-preset-row">
           <NButtonGroup size="small">
             <NButton @click="changeUA('chrome')">Chrome</NButton>
             <NButton @click="changeUA('edge')">Edge</NButton>
             <NButton @click="changeUA('safari')">Safari</NButton>
             <NButton @click="changeUA('firefox')">Firefox</NButton>
-            <NButton @click="changeUA('transmission')">Transmission</NButton>
           </NButtonGroup>
           <NButton class="ua-reset-btn" size="small" ghost @click="form.userAgent = ''">
             {{ t('preferences.ua-reset') }}
           </NButton>
         </div>
       </NFormItem>
+      <NFormItem :label="t('preferences.ua-saved')">
+        <UserAgentManager
+          v-model:profiles="form.userAgentProfiles"
+          v-model:rules="form.userAgentRules"
+          v-model:recent-profile-ids="form.recentUserAgentProfileIds"
+        />
+      </NFormItem>
 
       <!-- Timeout & Disk -->
       <NDivider title-placement="left">{{ t('preferences.transfer-params') }}</NDivider>
       <NFormItem :label="t('preferences.connect-timeout')">
-        <NInputNumber v-model:value="form.connectTimeout" :min="1" :max="600" style="width: 120px" />
-        <NText depth="3" style="font-size: 12px; margin-left: 8px">{{ t('preferences.unit-seconds') }}</NText>
+        <NInputNumber v-model:value="form.connectTimeout" :min="1" :max="600" class="pref-number" />
+        <NText depth="3" class="pref-inline-note">{{ t('preferences.unit-seconds') }}</NText>
       </NFormItem>
       <NFormItem :label="t('preferences.timeout')">
-        <NInputNumber v-model:value="form.timeout" :min="1" :max="600" style="width: 120px" />
-        <NText depth="3" style="font-size: 12px; margin-left: 8px">{{ t('preferences.unit-seconds') }}</NText>
+        <NInputNumber v-model:value="form.timeout" :min="1" :max="600" class="pref-number" />
+        <NText depth="3" class="pref-inline-note">{{ t('preferences.unit-seconds') }}</NText>
       </NFormItem>
       <NFormItem :label="t('preferences.file-allocation')">
-        <NSelect
-          v-model:value="form.fileAllocation"
-          :options="FILE_ALLOCATION_OPTIONS.map((v: string) => ({ label: v, value: v }))"
-          style="width: 140px"
-        />
+        <NSelect v-model:value="form.fileAllocation" :options="fileAllocationOptions" class="pref-control-auto" />
+      </NFormItem>
+      <NFormItem>
+        <template #label>
+          <PreferenceHintLabel :label="t('preferences.async-dns')" :hint="t('preferences.async-dns-hint')" />
+        </template>
+        <NSwitch v-model:value="form.asyncDns" />
       </NFormItem>
     </NForm>
     <PreferenceActionBar :is-dirty="isDirty" @save="handleSave" @discard="handleReset" @restart="handleManualRestart" />
@@ -372,45 +461,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.preference-form-wrapper {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-.form-preference {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 16px 30px 64px 36px;
-}
-.form-preference :deep(.n-form-item) {
-  padding-left: 50px;
-}
-.form-preference :deep(.collapse-indent) {
-  margin-left: 16px;
-}
-.info-text {
-  color: var(--m3-on-surface-variant);
-  font-size: 12px;
-  max-width: 520px;
-  word-wrap: break-word;
-}
-.form-label-with-hint {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-width: 220px;
-  line-height: 1.35;
-  white-space: normal;
-}
-.form-label-with-hint .info-text {
-  max-width: 220px;
-}
-.form-preference :deep(.hinted-form-item) {
-  margin-bottom: 18px;
-}
-
-/* ── Proxy collapse — CSS Grid 0fr→1fr ───────────────────────────── */
 .proxy-collapse {
   display: grid;
   grid-template-rows: 0fr;

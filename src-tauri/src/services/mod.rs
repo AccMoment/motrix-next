@@ -14,6 +14,7 @@
 
 pub mod config;
 pub mod deep_link;
+pub mod external_input;
 pub mod frontend_action;
 pub mod http_api;
 pub mod monitor;
@@ -25,8 +26,10 @@ pub mod speed;
 pub mod stat;
 
 use crate::aria2::client::Aria2State;
+use crate::engine::SUPPORTED_ENGINE_KEYS;
 use crate::error::AppError;
 use config::RuntimeConfigState;
+use port_guard::DEFAULT_RPC_PORT;
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
 
@@ -38,14 +41,18 @@ const NON_HOT_RELOADABLE: &[&str] = &[
     // needRestartKeys
     "dht-listen-port",
     "ed2k-listen-port",
-    "ed2k-node-list",
     "ed2k-server",
-    "ed2k-server-list",
-    "ed2k-share-file",
+    "ed2k-udp-listen-port",
     "ed2k-upload-slots",
     "listen-port",
     "rpc-listen-port",
     "rpc-secret",
+    "bt-enable-lpd",
+    "bt-force-encryption",
+    "bt-max-peers",
+    "bt-require-crypto",
+    "enable-dht",
+    "enable-peer-exchange",
     // aria2 docs exclusions
     "checksum",
     "index-out",
@@ -53,40 +60,6 @@ const NON_HOT_RELOADABLE: &[&str] = &[
     "pause",
     "select-file",
     "rpc-save-upload-metadata",
-    "enable-dht",
-    // Needs full app relaunch (tauri-plugin-log init)
-    "log-level",
-];
-
-/// Keys removed from Aria2 Next and rejected by both startup args and
-/// `changeGlobalOption`. Old system.json files may still contain them.
-const REMOVED_ENGINE_KEYS: &[&str] = &[
-    "async-dns",
-    "bt-load-saved-metadata",
-    "bt-hash-check-seed",
-    "bt-metadata-only",
-    "bt-prioritize-piece",
-    "bt-remove-unselected-file",
-    "bt-save-metadata",
-    "bt-seed-unverified",
-    "bt-tracker-connect-timeout",
-    "bt-tracker-timeout",
-    "dht-entry-point6",
-    "enable-dht6",
-    "follow-metalink",
-    "follow-torrent",
-    "ftp-reuse-connection",
-    "http-auth-challenge",
-    "metalink-base-uri",
-    "metalink-enable-unique-protocol",
-    "metalink-language",
-    "metalink-location",
-    "metalink-os",
-    "metalink-preferred-protocol",
-    "metalink-version",
-    "ssh-host-key-md",
-    "peer-agent",
-    "peer-id-prefix",
 ];
 
 /// Reads the `system.json` store and returns its key-value pairs as a
@@ -104,7 +77,8 @@ fn read_system_options(
     // system.json stores all keys at the root level
     let mut opts = serde_json::Map::new();
     for key in store.keys() {
-        if NON_HOT_RELOADABLE.contains(&key.as_str()) || REMOVED_ENGINE_KEYS.contains(&key.as_str())
+        if !SUPPORTED_ENGINE_KEYS.contains(&key.as_str())
+            || NON_HOT_RELOADABLE.contains(&key.as_str())
         {
             continue;
         }
@@ -314,7 +288,7 @@ fn read_engine_credentials(app: &tauri::AppHandle) -> Result<(u16, String), AppE
                     .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
             })
         })
-        .unwrap_or(16800);
+        .unwrap_or(DEFAULT_RPC_PORT);
 
     let secret = prefs
         .as_ref()
@@ -510,16 +484,18 @@ mod tests {
         assert!(NON_HOT_RELOADABLE.contains(&"rpc-secret"));
         assert!(NON_HOT_RELOADABLE.contains(&"listen-port"));
         assert!(NON_HOT_RELOADABLE.contains(&"dht-listen-port"));
-    }
-
-    #[test]
-    fn non_hot_reloadable_contains_log_level() {
-        assert!(NON_HOT_RELOADABLE.contains(&"log-level"));
+        assert!(NON_HOT_RELOADABLE.contains(&"ed2k-listen-port"));
+        assert!(NON_HOT_RELOADABLE.contains(&"ed2k-udp-listen-port"));
     }
 
     #[test]
     fn non_hot_reloadable_contains_startup_only_keys() {
         assert!(NON_HOT_RELOADABLE.contains(&"enable-dht"));
+        assert!(NON_HOT_RELOADABLE.contains(&"enable-peer-exchange"));
+        assert!(NON_HOT_RELOADABLE.contains(&"bt-enable-lpd"));
+        assert!(NON_HOT_RELOADABLE.contains(&"bt-force-encryption"));
+        assert!(NON_HOT_RELOADABLE.contains(&"bt-require-crypto"));
+        assert!(NON_HOT_RELOADABLE.contains(&"bt-max-peers"));
     }
 
     #[test]

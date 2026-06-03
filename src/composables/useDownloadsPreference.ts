@@ -11,6 +11,7 @@ import {
   buildDefaultCategories,
   BUILTIN_CATEGORY_LABELS,
   BUILTIN_CATEGORY_TEMPLATES,
+  COMPLETED_RECORD_RETENTION_OPTIONS,
 } from '@shared/constants'
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ export interface DownloadsForm {
   deleteTorrentAfterComplete: boolean
   autoDeleteStaleRecords: boolean
   clearCompletedOnExit: boolean
+  completedRecordRetentionDays: number
 }
 
 // ── Internals ───────────────────────────────────────────────────────
@@ -109,6 +111,7 @@ export function buildDownloadsForm(config: AppConfig, defaultDir: string = ''): 
     deleteTorrentAfterComplete: config.deleteTorrentAfterComplete ?? false,
     autoDeleteStaleRecords: config.autoDeleteStaleRecords ?? false,
     clearCompletedOnExit: config.clearCompletedOnExit ?? false,
+    completedRecordRetentionDays: config.completedRecordRetentionDays ?? D.completedRecordRetentionDays,
   }
 }
 
@@ -155,4 +158,15 @@ export function recordDownloadsDirectory(f: DownloadsForm, recordDirectory: (dir
   const directory = f.dir.trim()
   if (!directory) return
   recordDirectory(directory)
+}
+
+export function getCompletedRecordRetentionSelectValue(days: number): number {
+  return COMPLETED_RECORD_RETENTION_OPTIONS.includes(days as (typeof COMPLETED_RECORD_RETENTION_OPTIONS)[number])
+    ? days
+    : -1
+}
+
+export function resolveCompletedRecordRetentionDays(selectedValue: number, currentDays: number): number {
+  if (selectedValue !== -1) return selectedValue
+  return currentDays > 0 ? currentDays : 30
 }

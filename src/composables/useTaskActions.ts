@@ -7,6 +7,7 @@
  */
 import { ref, type Ref, h } from 'vue'
 import { getTaskUri, getTaskDisplayName, resolveOpenTarget, canRestart } from '@shared/utils'
+import { getErrorMessage } from '@shared/utils/errorMessage'
 import { invoke } from '@tauri-apps/api/core'
 import { deleteTaskFiles } from '@/composables/useFileDelete'
 import { resolveTaskFilePath, requestFileRecheck } from '@/composables/useArchivedPaths'
@@ -22,9 +23,10 @@ interface TaskActionsDeps {
     removeTask: (task: Aria2Task) => Promise<unknown>
     removeTaskRecord: (task: Aria2Task) => Promise<unknown>
     restartTask: (task: Aria2Task) => Promise<unknown>
-    stopSeeding: (task: Aria2Task) => Promise<unknown>
+    stopSharing: (task: Aria2Task) => Promise<unknown>
     showTaskDetail: (task: Aria2Task) => void
     fetchList: () => Promise<unknown>
+    taskList: Aria2Task[]
   }
   preferenceConfig: () => AppConfig
   t: (key: string, params?: Record<string, unknown>) => string
@@ -47,7 +49,7 @@ export function useTaskActions(deps: TaskActionsDeps) {
       .pauseTask(task)
       .then(() => message.success(t('task.pause-task-success', { taskName })))
       .catch((e) => {
-        logger.warn('TaskView.pauseTask', e)
+        logger.warn('TaskView.pauseTask', getErrorMessage(e))
         message.error(t('task.pause-task-fail', { taskName }))
       })
   }
@@ -64,7 +66,7 @@ export function useTaskActions(deps: TaskActionsDeps) {
         .restartTask(task)
         .then(() => message.success(t('task.restart-task-success', { taskName })))
         .catch((e) => {
-          logger.warn('TaskView.restartTask', e)
+          logger.warn('TaskView.restartTask', getErrorMessage(e))
           message.error(t('task.restart-task-fail', { taskName }))
         })
     } else {
@@ -72,7 +74,7 @@ export function useTaskActions(deps: TaskActionsDeps) {
         .resumeTask(task)
         .then(() => message.success(t('task.resume-task-success', { taskName })))
         .catch((e) => {
-          logger.warn('TaskView.resumeTask', e)
+          logger.warn('TaskView.resumeTask', getErrorMessage(e))
           message.error(t('task.resume-task-fail', { taskName }))
         })
     }
@@ -249,16 +251,16 @@ export function useTaskActions(deps: TaskActionsDeps) {
     }
   }
 
-  async function handleStopSeeding(task: Aria2Task) {
+  async function handleStopSharing(task: Aria2Task) {
     if (stoppingGids.value.includes(task.gid)) return
     stoppingGids.value = [...stoppingGids.value, task.gid]
     try {
-      await taskStore.stopSeeding(task)
+      await taskStore.stopSharing(task)
       stoppingGids.value = stoppingGids.value.filter((g) => g !== task.gid)
-      message.success(t('task.stop-seeding-success'))
+      message.success(t('task.stop-sharing-success'))
       await taskStore.fetchList()
     } catch (e) {
-      logger.warn('[TaskView] stopSeeding failed:', String(e))
+      logger.warn('[TaskView] stopSharing failed:', String(e))
       stoppingGids.value = stoppingGids.value.filter((g) => g !== task.gid)
     }
   }
@@ -272,6 +274,6 @@ export function useTaskActions(deps: TaskActionsDeps) {
     handleShowInfo,
     handleShowInFolder,
     handleOpenFile,
-    handleStopSeeding,
+    handleStopSharing,
   }
 }

@@ -4,7 +4,8 @@
 //! tokio runtime.  Provides a local REST API for browser extension → desktop
 //! communication.
 //!
-//! All download requests are routed through the frontend via deep-link emit.
+//! Download requests are routed through the frontend as structured external
+//! inputs. Legacy OS protocol handling still uses the deep-link service.
 //! Rust's role is window lifecycle management (recreate if destroyed in
 //! lightweight mode) + event dispatch.  The frontend decides whether to show
 //! the AddTask dialog (autoSubmit=OFF) or auto-submit (autoSubmit=ON).
@@ -19,8 +20,8 @@
 
 use crate::aria2::client::Aria2State;
 use crate::error::AppError;
-use crate::services::config::RuntimeConfigState;
-use crate::services::deep_link;
+use crate::services::config::{RuntimeConfigState, DEFAULT_EXTENSION_API_PORT};
+use crate::services::external_input::{self, ExternalDownloadInput, ExternalRequestHeader};
 use crate::services::port_guard;
 use axum::{
     extract::State,
@@ -42,8 +43,14 @@ use tower_http::cors::CorsLayer;
 #[derive(Debug, Deserialize)]
 pub struct AddRequest {
     pub url: String,
+    #[serde(rename = "finalUrl")]
+    pub final_url: Option<String>,
     pub referer: Option<String>,
     pub cookie: Option<String>,
+    #[serde(rename = "userAgent")]
+    pub user_agent: Option<String>,
+    #[serde(rename = "requestHeaders", default)]
+    pub request_headers: Vec<ExternalRequestHeader>,
     /// Output filename hint from the browser extension.
     /// Extracted from the URL's `response-content-disposition` query parameter
     /// (RFC 6266).
@@ -179,18 +186,20 @@ async fn handle_add(
     validate_bearer_token(&headers, &secret)?;
 
     log::info!(
-        "http_api: POST /add url={} referer={} cookie={} filename={}",
+        "http_api: POST /add url={} final_url={} header_count={} has_user_agent={} has_cookie={} source=http-api filename={}",
         summarize_url_for_log(&body.url),
-        body.referer
+        body.final_url
             .as_deref()
             .map(summarize_url_for_log)
             .unwrap_or_else(|| "none".to_string()),
-        if body.cookie.is_some() {
+        body.request_headers.len(),
+        body.user_agent.as_ref().is_some_and(|v| !v.is_empty()),
+        body.cookie.as_ref().is_some_and(|v| !v.is_empty()),
+        if body.filename.as_ref().is_some_and(|v| !v.is_empty()) {
             "present"
         } else {
             "none"
         },
-        body.filename.as_deref().unwrap_or("none"),
     );
 
     // Route ALL downloads through the frontend — single code path.
@@ -199,7 +208,7 @@ async fn handle_add(
     // or auto-submit silently (autoSubmit=ON) based on the user's preference.
     // Rust's only job: ensure the window exists, then emit.
     //
-    // This unified path handles supported URL types (HTTP, magnet, torrent)
+    // This unified path handles supported URL types (HTTP, magnet, local torrent)
     // and all window states (normal, hidden, destroyed in lightweight mode).
     route_to_frontend(&ctx.app, &body);
     Ok(Json(AddResponse {
@@ -340,11 +349,20 @@ fn read_api_secret(app: &AppHandle) -> String {
 
 /// Route a download request through the shared external-input channel.
 fn route_to_frontend(app: &AppHandle, req: &AddRequest) {
-    let deep_link_str = build_deep_link_url(req);
+    let input = ExternalDownloadInput {
+        url: req.url.clone(),
+        final_url: req.final_url.clone(),
+        referer: req.referer.clone(),
+        cookie: req.cookie.clone(),
+        filename: req.filename.clone(),
+        user_agent: req.user_agent.clone(),
+        request_headers: req.request_headers.clone(),
+        source: Some("http-api".to_string()),
+    };
     if should_silent_route_extension_input(app, req) {
-        deep_link::route_silent_external_inputs(app, vec![deep_link_str], "http-api");
+        external_input::route_external_inputs(app, vec![input], "http-api", true);
     } else {
-        deep_link::route_external_inputs(app, vec![deep_link_str], "http-api");
+        external_input::route_external_inputs(app, vec![input], "http-api", false);
     }
 }
 
@@ -362,15 +380,16 @@ fn should_silent_route_extension_input(app: &AppHandle, req: &AddRequest) -> boo
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
             let auto_select_all = p
-                .get("autoSelectAllFilesFromExtension")
+                .get("autoSelectAllBtFilesFromExtension")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
             let pause_metadata = p
                 .get("pauseMetadata")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true);
+            let effective_url = req.final_url.as_deref().unwrap_or(&req.url);
             should_silent_route_url(
-                &req.url,
+                effective_url,
                 auto_submit,
                 silent,
                 auto_select_all,
@@ -390,28 +409,32 @@ fn should_silent_route_url(
     if !(auto_submit && silent) {
         return false;
     }
-    if auto_select_all {
-        return true;
-    }
-
     let lower = raw_url.to_ascii_lowercase();
     if lower.starts_with("magnet:") {
+        if auto_select_all {
+            return true;
+        }
         return !pause_metadata;
     }
-    !is_file_selection_url(raw_url)
+    if is_remote_torrent_url(raw_url) {
+        return auto_select_all;
+    }
+    true
 }
 
-fn is_file_selection_url(raw_url: &str) -> bool {
-    let path = url::Url::parse(raw_url)
-        .map(|url| url.path().to_ascii_lowercase())
-        .unwrap_or_else(|_| raw_url.to_ascii_lowercase());
-    path.ends_with(".torrent")
+fn is_remote_torrent_url(raw_url: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw_url) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && url.path().to_ascii_lowercase().ends_with(".torrent")
 }
 
 /// Build a `motrixnext://new?url=X&referer=Y&cookie=Z` deep-link URL.
 ///
 /// Uses the `url` crate for proper percent-encoding of query parameter
 /// values, avoiding manual escaping bugs with special characters.
+#[cfg(test)]
 fn build_deep_link_url(req: &AddRequest) -> String {
     let mut deep_link = url::Url::parse("motrixnext://new").expect("static URL must parse");
     {
@@ -586,7 +609,7 @@ pub async fn restart_on_port(app: &AppHandle, new_port: u16) -> Result<u16, AppE
 // ── Read extension API port from RuntimeConfig ─────────────────────
 
 /// Read the extension API port from RuntimeConfigState.
-/// Falls back to store read, then to 16801 if neither is available.
+/// Falls back to store read, then to the default extension API port if neither is available.
 pub async fn read_extension_api_port(app: &AppHandle) -> u16 {
     // Primary: RuntimeConfigState (cached, always in sync)
     if let Some(rc_state) = app.try_state::<RuntimeConfigState>() {
@@ -608,7 +631,7 @@ fn read_extension_api_port_from_store(app: &AppHandle) -> u16 {
                     .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
             })
         })
-        .unwrap_or(16801)
+        .unwrap_or(DEFAULT_EXTENSION_API_PORT)
 }
 
 #[cfg(test)]
@@ -679,14 +702,38 @@ mod tests {
     fn deserialize_add_request_full() {
         let json = serde_json::json!({
             "url": "https://example.com/file.zip",
+            "finalUrl": "https://cdn.example.com/file.zip",
             "referer": "https://example.com/page",
             "cookie": "sid=abc",
+            "userAgent": "Mozilla/5.0",
+            "requestHeaders": [
+                { "name": "Accept", "value": "application/octet-stream" },
+                { "name": "Accept-Language", "value": "en-US,en;q=0.9" }
+            ],
             "filename": "file.zip"
         });
         let req: AddRequest = serde_json::from_value(json).expect("deserialize");
         assert_eq!(req.url, "https://example.com/file.zip");
+        assert_eq!(
+            req.final_url.as_deref(),
+            Some("https://cdn.example.com/file.zip")
+        );
         assert_eq!(req.referer.as_deref(), Some("https://example.com/page"));
         assert_eq!(req.cookie.as_deref(), Some("sid=abc"));
+        assert_eq!(req.user_agent.as_deref(), Some("Mozilla/5.0"));
+        assert_eq!(
+            req.request_headers,
+            vec![
+                ExternalRequestHeader {
+                    name: "Accept".to_string(),
+                    value: "application/octet-stream".to_string()
+                },
+                ExternalRequestHeader {
+                    name: "Accept-Language".to_string(),
+                    value: "en-US,en;q=0.9".to_string()
+                }
+            ]
+        );
         assert_eq!(req.filename.as_deref(), Some("file.zip"));
     }
 
@@ -695,8 +742,11 @@ mod tests {
         let json = serde_json::json!({ "url": "https://example.com/file.zip" });
         let req: AddRequest = serde_json::from_value(json).expect("deserialize");
         assert_eq!(req.url, "https://example.com/file.zip");
+        assert!(req.final_url.is_none());
         assert!(req.referer.is_none());
         assert!(req.cookie.is_none());
+        assert!(req.user_agent.is_none());
+        assert!(req.request_headers.is_empty());
         assert!(req.filename.is_none());
     }
 
@@ -908,8 +958,11 @@ mod tests {
     fn deep_link_url_includes_filename() {
         let req = AddRequest {
             url: "https://cdn.quark.cn/hash123".to_string(),
+            final_url: None,
             referer: None,
             cookie: None,
+            user_agent: None,
+            request_headers: Vec::new(),
             filename: Some("ghost-sample-v0.1.xmgic".to_string()),
         };
         let result = build_deep_link_url(&req);
@@ -923,8 +976,11 @@ mod tests {
     fn deep_link_url_omits_empty_filename() {
         let req = AddRequest {
             url: "https://example.com/file.zip".to_string(),
+            final_url: None,
             referer: None,
             cookie: None,
+            user_agent: None,
+            request_headers: Vec::new(),
             filename: Some(String::new()),
         };
         let result = build_deep_link_url(&req);
@@ -935,8 +991,11 @@ mod tests {
     fn deep_link_url_omits_none_filename() {
         let req = AddRequest {
             url: "https://example.com/file.zip".to_string(),
+            final_url: None,
             referer: None,
             cookie: None,
+            user_agent: None,
+            request_headers: Vec::new(),
             filename: None,
         };
         let result = build_deep_link_url(&req);

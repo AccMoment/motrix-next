@@ -66,6 +66,10 @@ export async function restartTask(task: Aria2Task, api: RestartTaskApi, historyA
   // Submit each file as a separate download with ALL its mirror URIs,
   // tracking created GIDs for rollback.
   const isBT = checkTaskIsBT(task)
+  if (isBT) {
+    options['check-integrity'] = options['check-integrity'] ?? 'true'
+    options['force-save'] = options['force-save'] ?? 'true'
+  }
   const createdGids: string[] = []
   try {
     for (const mirrorGroup of descriptors) {

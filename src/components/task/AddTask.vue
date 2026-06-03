@@ -16,18 +16,18 @@ import {
   classifySubmitError,
   submitBatchItems,
   submitManualUris,
-  isGlobalProxyConfigured,
-  isGlobalDownloadProxyActive,
   getDownloadProxy,
 } from '@/composables/useAddTaskSubmit'
-import type { ManualUriSubmitResult } from '@/composables/useAddTaskSubmit'
+import type { AddTaskForm, ManualUriSubmitResult } from '@/composables/useAddTaskSubmit'
 import { isValidAria2ProxyUrl } from '@shared/utils/aria2Proxy'
 import { handleTaskStart } from '@/composables/useTaskNotifyHandlers'
 import { isMagnetUri } from '@/composables/useMagnetFlow'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import { downloadDir } from '@tauri-apps/api/path'
 import { logger } from '@shared/logger'
 import { getErrorMessage } from '@shared/utils/errorMessage'
+import { normalizeProxyMode } from '@shared/utils/proxyPolicy'
+import { resolveUserVisibleDownloadDir } from '@shared/utils/userVisibleDirectory'
+import { findMatchingUserAgentRule, resolveUserAgent } from '@shared/utils/userAgentPolicy'
 
 import { resolveUnresolvedItems, chooseTorrentFile as chooseTorrentFileImpl } from '@/composables/useAddTaskFileOps'
 import {
@@ -49,7 +49,7 @@ import {
 } from 'naive-ui'
 import { useAppMessage } from '@/composables/useAppMessage'
 import type { DataTableColumns } from 'naive-ui'
-import type { BatchItem } from '@shared/types'
+import type { BatchItem, UserAgentProfile } from '@shared/types'
 import { FolderOpenOutline, CloudUploadOutline } from '@vicons/ionicons5'
 import { vAutoAnimate } from '@formkit/auto-animate'
 import AdvancedOptions from './addtask/AdvancedOptions.vue'
@@ -93,8 +93,32 @@ function switchTab(target: string): void {
 const showAdvanced = ref(false)
 const submitting = ref(false)
 const selectedBatchIndex = ref(0)
+const userAgentManuallyEdited = ref(false)
+const defaultTaskProxyMode = () => normalizeProxyMode(preferenceStore.config.proxy.mode)
+const defaultTaskProxyServer = () => (defaultTaskProxyMode() === 'manual' ? preferenceStore.config.proxy.server : '')
+const defaultTaskProxyUsername = () =>
+  defaultTaskProxyMode() === 'manual' ? preferenceStore.config.proxy.username || '' : ''
+const defaultTaskProxyPassword = () =>
+  defaultTaskProxyMode() === 'manual' ? preferenceStore.config.proxy.password || '' : ''
 
-const form = ref({
+function syncDefaultTaskProxy() {
+  form.value.proxyMode = defaultTaskProxyMode()
+  form.value.customProxy = defaultTaskProxyServer()
+  form.value.customProxyUsername = defaultTaskProxyUsername()
+  form.value.customProxyPassword = defaultTaskProxyPassword()
+  form.value.appProxy = preferenceStore.config.proxy
+}
+
+function syncPendingExternalMetadata() {
+  form.value.referer = appStore.pendingReferer
+  form.value.cookie = appStore.pendingCookie
+  form.value.out = appStore.pendingFilename
+  form.value.userAgent = appStore.pendingUserAgent
+  form.value.requestHeaders = appStore.pendingRequestHeaders
+  applyResolvedUserAgent()
+}
+
+const form = ref<AddTaskForm>({
   uris: '',
   out: '',
   dir: preferenceStore.config.dir || '',
@@ -106,34 +130,54 @@ const form = ref({
   saveHttpAuth: true,
   referer: '',
   cookie: '',
-  proxyMode: (isGlobalDownloadProxyActive(preferenceStore.config.proxy) ? 'global' : 'none') as
-    | 'none'
-    | 'global'
-    | 'custom',
-  customProxy: '',
-})
-
-/**
- * Whether a usable global proxy is configured in Settings → Advanced.
- * Must read through preferenceStore.config (not a cached local) because
- * the store replaces the entire config ref on save, which would break
- * reactivity for any local alias.
- */
-const globalProxyAvailable = computed(() => isGlobalProxyConfigured(preferenceStore.config.proxy))
-
-/** The global proxy server address for display in the radio hint. */
-const globalProxyServer = computed(() => preferenceStore.config.proxy?.server ?? '')
-
-// Sync proxyMode when the global proxy config changes (e.g. disabled in
-// settings, or config loads after component mount).  Without this, a stale
-// 'global' mode would leave the proxy-hint visible with no matching radio.
-watch(globalProxyAvailable, (available) => {
-  if (!available && form.value.proxyMode === 'global') {
-    form.value.proxyMode = 'none'
-  }
+  proxyMode: defaultTaskProxyMode(),
+  customProxy: defaultTaskProxyServer(),
+  customProxyUsername: defaultTaskProxyUsername(),
+  customProxyPassword: defaultTaskProxyPassword(),
+  appProxy: preferenceStore.config.proxy,
+  requestHeaders: [],
+  uriRequestContexts: {},
 })
 
 const maxSplit = ENGINE_MAX_CONNECTION_PER_SERVER
+const firstRegularUri = computed(
+  () =>
+    form.value.uris
+      .split(/\r?\n/)
+      .map((uri) => uri.trim())
+      .find((uri) => uri && !isMagnetUri(uri)) ?? '',
+)
+const matchedUserAgentRule = computed(() =>
+  findMatchingUserAgentRule({
+    url: firstRegularUri.value,
+    referer: form.value.referer,
+    profiles: preferenceStore.config.userAgentProfiles,
+    rules: preferenceStore.config.userAgentRules,
+  }),
+)
+const userAgentSourceText = computed(() => {
+  if (userAgentManuallyEdited.value) return t('task.ua-source-manual')
+  const match = matchedUserAgentRule.value
+  if (match && form.value.userAgent === match.profile.value)
+    return t('task.ua-source-rule', { host: match.rule.hostPattern })
+  if (appStore.pendingUserAgent && form.value.userAgent === appStore.pendingUserAgent)
+    return t('task.ua-source-extension')
+  return ''
+})
+
+function applyResolvedUserAgent() {
+  if (userAgentManuallyEdited.value) return
+  const resolved = resolveUserAgent({
+    manualUserAgent: '',
+    pluginUserAgent: appStore.pendingUserAgent,
+    defaultUserAgent: preferenceStore.config.userAgent,
+    url: firstRegularUri.value,
+    referer: form.value.referer,
+    profiles: preferenceStore.config.userAgentProfiles,
+    rules: preferenceStore.config.userAgentRules,
+  })
+  form.value.userAgent = resolved.userAgent
+}
 
 // Real-time tracking: NInputNumber only commits v-model on blur,
 // so we capture the native `input` event via bubbling from the inner
@@ -205,24 +249,35 @@ watch(
       }
       // Sync split from the user's Basic preference value
       form.value.split = preferenceStore.config.split ?? form.value.split
+      syncDefaultTaskProxy()
       // Reset the manual-override flag each time the dialog opens
       dirUserModified.value = false
 
-      // Pre-fill referer and cookie from browser extension deep-link.
-      // These are extracted by handleDeepLinkUrls() and stored as pending
-      // values. Without this, the manual-submit path silently discards
-      // them — causing cookie-gated CDNs (Quark, Baidu) to return 412.
-      if (appStore.pendingReferer) {
-        form.value.referer = appStore.pendingReferer
-      }
-      if (appStore.pendingCookie) {
-        form.value.cookie = appStore.pendingCookie
-      }
-      if (appStore.pendingFilename) {
-        form.value.out = appStore.pendingFilename
-      }
+      syncPendingExternalMetadata()
     }
   },
+)
+
+watch(
+  () => preferenceStore.config.proxy,
+  () => {
+    if (props.show) syncDefaultTaskProxy()
+  },
+  { deep: true },
+)
+
+watch(
+  [
+    firstRegularUri,
+    () => form.value.referer,
+    () => preferenceStore.config.userAgent,
+    () => preferenceStore.config.userAgentProfiles,
+    () => preferenceStore.config.userAgentRules,
+  ],
+  () => {
+    if (props.show) applyResolvedUserAgent()
+  },
+  { deep: true },
 )
 
 const checkedRowKeys = computed({
@@ -259,7 +314,9 @@ function onDirInput(value: string) {
 onMounted(async () => {
   if (!form.value.dir) {
     try {
-      form.value.dir = await downloadDir()
+      const resolvedDir = await resolveUserVisibleDownloadDir({ configuredDir: preferenceStore.config.dir })
+      form.value.dir = resolvedDir.path
+      logger.info('AddTask.dir', `resolved source=${resolvedDir.source} fallback=${resolvedDir.usedFallback}`)
     } catch (e) {
       logger.debug('AddTask.dir', e)
       form.value.dir = '~/Downloads'
@@ -294,6 +351,9 @@ watch(
         form.value.uris = mergeRawUriLines(
           form.value.uris,
           uriItems.map((i) => i.payload),
+        )
+        form.value.uriRequestContexts = Object.fromEntries(
+          uriItems.flatMap((i) => (i.browserContext ? [[i.payload, i.browserContext]] : [])),
         )
         appStore.pendingBatch = batch.value.filter((i) => i.kind !== 'uri')
       }
@@ -343,6 +403,10 @@ watch(
         '',
         uriItems.map((i) => i.payload),
       )
+      form.value.uriRequestContexts = Object.fromEntries(
+        uriItems.flatMap((i) => (i.browserContext ? [[i.payload, i.browserContext]] : [])),
+      )
+      syncPendingExternalMetadata()
       appStore.pendingBatch = batch.value.filter((i) => i.kind !== 'uri')
     }
     // Auto-switch tab SYNCHRONOUSLY (before any await) so NTabs computes
@@ -396,6 +460,17 @@ function onDirectorySelect(dir: string) {
   dirUserModified.value = categoryEnabled.value && dir.trim().length > 0
 }
 
+function onUserAgentInput(value: string) {
+  userAgentManuallyEdited.value = true
+  form.value.userAgent = value
+}
+
+function selectUserAgentProfile(profile: UserAgentProfile) {
+  userAgentManuallyEdited.value = true
+  form.value.userAgent = profile.value
+  preferenceStore.recordRecentUserAgentProfile(profile.id)
+}
+
 function removeBatchItem(item: BatchItem) {
   appStore.pendingBatch = batch.value.filter((i) => i !== item)
   selectedBatchIndex.value = Math.min(selectedBatchIndex.value, Math.max(0, fileItems.value.length - 1))
@@ -415,9 +490,13 @@ function handleClose() {
     saveHttpAuth: true,
     referer: '',
     cookie: '',
-    proxyMode: isGlobalDownloadProxyActive(preferenceStore.config.proxy) ? 'global' : 'none',
-    customProxy: '',
+    customProxyUsername: '',
+    customProxyPassword: '',
+    requestHeaders: [],
+    uriRequestContexts: {},
   })
+  syncDefaultTaskProxy()
+  userAgentManuallyEdited.value = false
   submitting.value = false
   selectedBatchIndex.value = 0
 }
@@ -428,7 +507,7 @@ async function handleSubmit() {
 
   try {
     // Validate custom proxy before building options
-    if (form.value.proxyMode === 'custom' && form.value.customProxy) {
+    if (form.value.proxyMode === 'manual' && form.value.customProxy) {
       if (!isValidAria2ProxyUrl(form.value.customProxy)) {
         message.error(t('task.proxy-unsupported-protocol'), { closable: true })
         submitting.value = false
@@ -441,7 +520,10 @@ async function handleSubmit() {
     const effectiveForm = {
       ...form.value,
       dir: form.value.dir.trim() || preferenceStore.config.dir,
-      globalProxyServer: globalProxyServer.value,
+      appProxy: preferenceStore.config.proxy,
+      defaultUserAgent: preferenceStore.config.userAgent,
+      userAgentProfiles: preferenceStore.config.userAgentProfiles,
+      userAgentRules: preferenceStore.config.userAgentRules,
     }
     const options = buildEngineOptions(effectiveForm)
     let manualResult: ManualUriSubmitResult = { submittedTaskNames: [], magnetGids: [], magnetFailures: [] }
@@ -699,7 +781,6 @@ function kindTagType(kind: string): 'info' | 'success' | 'warning' {
           </NFormItem>
           <AdvancedOptions
             v-model:show="showAdvanced"
-            v-model:user-agent="form.userAgent"
             v-model:authorization="form.authorization"
             v-model:http-auth-username="form.httpAuthUsername"
             v-model:http-auth-password="form.httpAuthPassword"
@@ -708,8 +789,16 @@ function kindTagType(kind: string): 'info' | 'success' | 'warning' {
             v-model:cookie="form.cookie"
             v-model:proxy-mode="form.proxyMode"
             v-model:custom-proxy="form.customProxy"
-            :global-proxy-available="globalProxyAvailable"
-            :global-proxy-server="globalProxyServer"
+            v-model:custom-proxy-username="form.customProxyUsername"
+            v-model:custom-proxy-password="form.customProxyPassword"
+            :source-url="firstRegularUri"
+            :user-agent="form.userAgent"
+            :user-agent-source="userAgentSourceText"
+            :user-agent-profiles="preferenceStore.config.userAgentProfiles"
+            :user-agent-rules="preferenceStore.config.userAgentRules"
+            :recent-user-agent-profile-ids="preferenceStore.config.recentUserAgentProfileIds"
+            @update:user-agent="onUserAgentInput"
+            @select-user-agent-profile="selectUserAgentProfile"
           />
         </div>
       </NForm>
