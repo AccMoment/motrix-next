@@ -648,7 +648,7 @@ function kindTagType(kind: string): 'info' | 'success' | 'warning' {
       class="add-task-card"
       :style="{
         maxWidth: '680px',
-        minWidth: '380px',
+        minWidth: 'min(380px, calc(100vw - 24px))',
         width: '70vw',
         margin: 'auto',
         height: '82vh',
@@ -667,6 +667,7 @@ function kindTagType(kind: string): 'info' | 'success' | 'warning' {
               <NFormItem :show-label="false" style="margin-bottom: 0">
                 <NInput
                   v-model:value="form.uris"
+                  class="uri-input"
                   type="textarea"
                   :rows="5"
                   :placeholder="t('task.uri-task-tips') || 'One URL per line'"
@@ -823,6 +824,12 @@ function kindTagType(kind: string): 'info' | 'success' | 'warning' {
  * URI textarea rows=5 ≈ 138px — keep both panes at same min-height. */
 .tab-pane-content {
   min-height: 150px;
+}
+
+.uri-input :deep(.n-input__textarea-el) {
+  white-space: pre-wrap;
+  overflow-wrap: normal;
+  word-break: break-all;
 }
 
 /* ── Torrent panel ────────────────────────────────────────────────── */

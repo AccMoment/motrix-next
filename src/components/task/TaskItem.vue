@@ -42,7 +42,6 @@ const taskRef = computed(() => props.task)
 const {
   taskFullName,
   isSharing,
-  isMetadataFetching,
   statusBadge,
   taskStatus,
   isActive,
@@ -238,17 +237,11 @@ onBeforeUnmount(() => {
           :processing="isActive"
         />
         <div class="task-progress-info">
-          <div class="progress-left" :class="{ 'info-hidden': !hasSizeInfo && !isMetadataFetching }">
-            <Transition name="metadata-hint" mode="out-in">
-              <span v-if="isMetadataFetching" key="metadata" class="metadata-hint">
-                <NIcon :size="12" class="metadata-hint-icon"><RadioOutline /></NIcon>
-                {{ t('task.bt-metadata-fetching') || 'Fetching torrent' }}
-              </span>
-              <span v-else key="size">
-                {{ completedSize }}
-                <span v-if="Number(task.totalLength) > 0"> / {{ totalSize }}</span>
-              </span>
-            </Transition>
+          <div class="progress-left" :class="{ 'info-hidden': !hasSizeInfo }">
+            <span>
+              {{ completedSize }}
+              <span v-if="Number(task.totalLength) > 0"> / {{ totalSize }}</span>
+            </span>
           </div>
           <div class="progress-right" :class="{ 'info-hidden': !isActive }">
             <span class="speed-text" :class="{ 'info-hidden': remaining <= 0 }">
@@ -373,21 +366,25 @@ onBeforeUnmount(() => {
   column-gap: 20px;
   align-items: start;
 }
+.task-header :deep(.n-tooltip-trigger) {
+  min-width: 0;
+  max-width: 100%;
+}
 .task-name {
   color: var(--m3-on-surface-variant);
   overflow: hidden;
   min-height: 26px;
   min-width: 0;
+  max-width: 100%;
 }
 .task-name > span {
   font-size: 14px;
   line-height: 26px;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
   text-overflow: ellipsis;
-  word-break: break-all;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 /* ── Filename resolution crossfade (Vue <Transition mode="out-in">) ── */
 /* Old text fades out → new text fades in. No flash because Vue applies  */
@@ -472,26 +469,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   transition: opacity 0.25s cubic-bezier(0.2, 0, 0, 1);
 }
-.metadata-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--m3-status-active);
-  font-size: 12px;
-  line-height: 14px;
-}
-.metadata-hint-enter-active,
-.metadata-hint-leave-active {
-  transition:
-    opacity 0.28s cubic-bezier(0.2, 0, 0, 1),
-    transform 0.28s cubic-bezier(0.2, 0, 0, 1);
-}
-.metadata-hint-enter-from,
-.metadata-hint-leave-to {
-  opacity: 0;
-  transform: translateY(2px);
-}
-
 /* ── Pure CSS show/hide (polling-safe) ────────────────────────────── */
 /* Bypasses Vue <Transition> to avoid leave-animation loss when       */
 /* reactive polling updates child content in the same render tick.    */
