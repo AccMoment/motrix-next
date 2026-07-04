@@ -336,6 +336,8 @@ export default {
   'copied-to-clipboard': '{label} копирано',
   'color-scheme': 'Цветова схема',
   'task-card-mode': 'Карта на задачата',
+  'sidebar-task-counts': 'Броячи на задачите в страничната лента',
+  'task-list-watermark': 'Воден знак на списъка със задачи',
   'task-card-mode-full': 'Пълен',
   'task-card-mode-compact': 'Компактен',
   'color-scheme-amber': 'Кехлибарено злато',

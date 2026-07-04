@@ -338,6 +338,8 @@ export default {
   'copied-to-clipboard': '{label} disalin',
   'color-scheme': 'Skema Warna',
   'task-card-mode': 'Kartu tugas',
+  'sidebar-task-counts': 'Hitungan tugas bilah samping',
+  'task-list-watermark': 'Tanda air daftar tugas',
   'task-card-mode-full': 'Penuh',
   'task-card-mode-compact': 'Ringkas',
   'color-scheme-amber': 'Emas Amber',

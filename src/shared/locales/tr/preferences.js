@@ -338,6 +338,8 @@ export default {
   'copied-to-clipboard': '{label} kopyalandı',
   'color-scheme': 'Renk şeması',
   'task-card-mode': 'Görev kartı',
+  'sidebar-task-counts': 'Kenar çubuğu görev sayıları',
+  'task-list-watermark': 'Görev listesi filigranı',
   'task-card-mode-full': 'Tam',
   'task-card-mode-compact': 'Kompakt',
   'color-scheme-amber': 'Kehribar altın',
