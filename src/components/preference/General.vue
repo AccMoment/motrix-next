@@ -4,7 +4,7 @@ import { ref, computed, watch, onMounted, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePreferenceStore } from '@/stores/preference'
 import { usePreferenceForm } from '@/composables/usePreferenceForm'
-import { useIpc } from '@/composables/useIpc'
+import { invoke } from '@tauri-apps/api/core'
 import { useEngineRestart } from '@/composables/useEngineRestart'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { arch as osArch, version as osVersion } from '@tauri-apps/plugin-os'
@@ -13,7 +13,7 @@ import { getVersion as getAppVersion } from '@tauri-apps/api/app'
 import { getVersion as getAria2Version } from '@/api/aria2'
 import { getLocale } from 'tauri-plugin-locale-api'
 import { resolveSystemLocale } from '@shared/utils/locale'
-import { i18n } from '@/composables/useLocale'
+import { SUPPORTED_LOCALES, loadLocale } from '@/composables/useLocale'
 import { logger } from '@shared/logger'
 import { writeAppClipboardText } from '@shared/utils'
 import {
@@ -98,6 +98,9 @@ const { form, isDirty, handleSave, handleReset, patchSnapshot, resetSnapshot } =
       // Determine the actual target locale for bilingual dialog rendering.
       const targetLocale = f.locale === 'auto' ? detectedLocaleCode.value || 'en-US' : f.locale
       const isEn = targetLocale === 'en-US'
+      // Locale messages are lazy-loaded — pull in the target locale so the
+      // dialog can render in it (falls back to English if loading fails).
+      if (!isEn) await loadLocale(targetLocale)
       const tt = (key: string) => t(key, {}, { locale: targetLocale })
       dialog.info({
         style: 'min-width: 520px',
@@ -122,8 +125,7 @@ const { form, isDirty, handleSave, handleReset, patchSnapshot, resetSnapshot } =
           ? tt('preferences.language-changed-later')
           : `${tt('preferences.language-changed-later')} · Later`,
         onPositiveClick: async () => {
-          const { stopEngine } = useIpc()
-          await stopEngine()
+          await invoke('stop_engine_command')
           relaunch()
         },
       })
@@ -299,7 +301,7 @@ onMounted(async () => {
   }
   try {
     const raw = (await getLocale()) || 'en-US'
-    detectedLocaleCode.value = resolveSystemLocale(raw, i18n.global.availableLocales)
+    detectedLocaleCode.value = resolveSystemLocale(raw, SUPPORTED_LOCALES)
   } catch (e) {
     logger.debug('General.detectLocale', e)
   }

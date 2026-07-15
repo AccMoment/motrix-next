@@ -1,5 +1,6 @@
 /** @fileoverview Application-wide constants: themes, intervals, suffixes, limits. */
 import { DEFAULT_TASK_MANUAL_ORDER, DEFAULT_TASK_SORT } from '@/composables/useTaskSort'
+import type { AppLogLevel, Aria2LogLevel } from '@shared/types'
 export const EMPTY_STRING = ''
 export const IS_PORTABLE = false
 
@@ -69,8 +70,8 @@ export const TASK_STATUS = {
   SHARING: 'sharing',
 }
 
-export const APP_LOG_LEVELS = ['error', 'warn', 'info', 'debug'] as const
-export const ARIA2_LOG_LEVELS = ['error', 'warn', 'notice', 'info', 'debug'] as const
+export const APP_LOG_LEVELS = ['error', 'warn', 'info', 'debug'] as const satisfies readonly AppLogLevel[]
+export const ARIA2_LOG_LEVELS = ['error', 'warn', 'info', 'debug', 'trace'] as const satisfies readonly Aria2LogLevel[]
 
 export const MAX_NUM_OF_DIRECTORIES = 5
 
@@ -83,6 +84,7 @@ export const ED2K_LISTEN_PORT = 29140
 export const ED2K_UDP_LISTEN_PORT = 29150
 export const ED2K_SERVER_MET_URL = 'https://upd.emule-security.org/server.met'
 export const ED2K_NODES_DAT_URL = 'https://upd.emule-security.org/nodes.dat'
+export const BT_PEER_BLOCKLIST_URL = 'https://bcr.pbh-btn.com/combine/all.txt'
 export const PORT_RECOVERY_RANGE_START = 29000
 export const PORT_RECOVERY_RANGE_END = 29999
 export const ENGINE_MAX_CONCURRENT_DOWNLOADS = 100
@@ -454,8 +456,8 @@ export const DEFAULT_APP_CONFIG = {
   userAgentProfiles: [],
   userAgentRules: [],
   recentUserAgentProfileIds: [],
-  logLevel: 'debug',
-  aria2LogLevel: 'notice',
+  logLevel: 'debug' as const,
+  aria2LogLevel: 'info' as const,
   cookie: '',
   runMode: '',
   engineBinPath: '',
@@ -464,6 +466,10 @@ export const DEFAULT_APP_CONFIG = {
   // ── Tracker ───────────────────────────────────────────────────
   btTrackerAutoSync: true,
   btTrackerSyncIntervalHours: 24,
+  btPeerBlocklistEnabled: true,
+  btPeerBlocklistUrl: BT_PEER_BLOCKLIST_URL,
+  btPeerBlocklistAutoSync: true,
+  btPeerBlocklistSyncIntervalHours: 24,
   trackerSource: [...DEFAULT_TRACKER_SOURCE],
   customTrackerUrls: [] as string[],
   btTracker: '',
